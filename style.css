@@ -1,0 +1,398 @@
+/**
+ * Dark Arcade Styling & Responsive Layout (Milestone 4 - Feature F21)
+ * Brick Breaker Web Game
+ */
+
+:root {
+  --bg-primary: #0c0f1d;
+  --bg-surface: #151b2e;
+  --bg-surface-elevated: #1e293b;
+  --border-color: #334155;
+  --accent-cyan: #06b6d4;
+  --accent-blue: #38bdf8;
+  --accent-amber: #f59e0b;
+  --accent-orange: #ea580c;
+  --accent-crimson: #dc2626;
+  --accent-purple: #a855f7;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --font-mono: 'Courier New', Courier, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#app-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 8px 12px;
+}
+
+/* ==========================================================================
+   Header & Controls Toolbar
+   ========================================================================== */
+#top-bar {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 6px;
+  padding-bottom: 6px;
+}
+
+.logo-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.game-title {
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  color: var(--accent-blue);
+  text-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+}
+
+.arcade-badge {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(6, 182, 212, 0.15);
+  color: var(--accent-cyan);
+  border: 1px solid var(--accent-cyan);
+}
+
+.controls-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--bg-surface);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  touch-action: manipulation;
+}
+
+.btn:hover {
+  background: var(--bg-surface-elevated);
+  border-color: var(--accent-blue);
+  color: #ffffff;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn-bot {
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.4);
+  color: var(--accent-cyan);
+}
+
+.btn-bot.active {
+  background: rgba(6, 182, 212, 0.25);
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.5);
+  color: #ffffff;
+}
+
+.bot-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--border-color);
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn-bot.active .bot-indicator {
+  background-color: var(--accent-cyan);
+  box-shadow: 0 0 8px var(--accent-cyan);
+  animation: pulse 1.2s infinite ease-in-out;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.8; }
+}
+
+.btn-icon-only {
+  padding: 6px 8px;
+  min-width: 32px;
+}
+
+.select-wrapper {
+  flex: 1;
+  min-width: 110px;
+}
+
+.level-dropdown {
+  width: 100%;
+  background: var(--bg-surface);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+
+.level-dropdown:focus {
+  border-color: var(--accent-blue);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+/* ==========================================================================
+   Canvas Wrapper (9:16 Portrait Aspect Ratio)
+   ========================================================================== */
+#canvas-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#game-canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 9 / 16;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--bg-surface-elevated);
+  border-radius: 8px;
+  box-shadow: 0 0 20px rgba(12, 15, 29, 0.8), 0 0 30px rgba(56, 189, 248, 0.1);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+/* ==========================================================================
+   Footer & Hotkeys Guide
+   ========================================================================== */
+#bottom-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  gap: 4px;
+  padding-top: 6px;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.touch-hint {
+  text-align: center;
+  font-size: 0.7rem;
+  color: var(--accent-blue);
+  opacity: 0.85;
+}
+
+.hotkeys-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+
+.hotkey-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(30, 41, 59, 0.5);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.68rem;
+}
+
+kbd {
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: #ffffff;
+}
+
+/* ==========================================================================
+   Help Modal Dialog
+   ========================================================================== */
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(12, 15, 29, 0.85);
+  backdrop-filter: blur(6px);
+}
+
+.modal-content {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 440px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--accent-blue);
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.close-btn:hover {
+  color: #ffffff;
+}
+
+.modal-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.guide-section h3 {
+  font-size: 0.85rem;
+  color: var(--accent-cyan);
+  margin-bottom: 6px;
+  letter-spacing: 0.5px;
+}
+
+.brick-legend-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+}
+
+.brick-swatch {
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.swatch-amber { background: var(--accent-amber); }
+.swatch-orange { background: var(--accent-orange); }
+.swatch-crimson { background: var(--accent-crimson); }
+.swatch-slate { background: #334155; border-color: #94a3b8; }
+.swatch-cyan { background: var(--accent-cyan); }
+.swatch-purple { background: var(--accent-purple); }
+
+.modal-footer {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-primary {
+  background: var(--accent-blue);
+  color: var(--bg-primary);
+  font-weight: 700;
+  border: none;
+  padding: 8px 16px;
+}
+
+.btn-primary:hover {
+  background: #7dd3fc;
+  color: var(--bg-primary);
+}

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Brick Breaker - Chute & Corridor Arcade</title>
+  <meta name="description" content="Lightweight high-performance Brick Breaker arcade game with narrow vertical corridors, dense brick grids, and autonomous bot AI.">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app-container">
+    <!-- Header / Top Bar Controls -->
+    <header id="top-bar">
+      <div class="logo-group">
+        <h1 class="game-title">BRICK BREAKER</h1>
+        <span class="badge arcade-badge">ARCADE 60FPS</span>
+      </div>
+
+      <div class="controls-bar">
+        <button id="bot-toggle-btn" class="btn btn-bot" title="Toggle AI Autonomous Bot (Hotkey: B)">
+          <span class="bot-indicator"></span>
+          <span class="btn-text">AI BOT [B]</span>
+        </button>
+        <button id="pause-btn" class="btn btn-secondary" title="Pause / Resume Game (Hotkey: P / Esc)">
+          <span class="btn-icon">⏸</span>
+          <span class="btn-text">PAUSE</span>
+        </button>
+        <button id="restart-btn" class="btn btn-secondary" title="Restart Level (Hotkey: R)">
+          <span class="btn-icon">↻</span>
+          <span class="btn-text">RESTART</span>
+        </button>
+        <div class="select-wrapper">
+          <label for="level-select" class="sr-only">Select Level</label>
+          <select id="level-select" class="level-dropdown" title="Select Level">
+            <option value="0">L1: Central Chute</option>
+            <option value="1">L2: Dual Corridors</option>
+            <option value="2">L3: City Matrix</option>
+            <option value="3">L4: Alpine Serpentine</option>
+            <option value="4">L5: The Gauntlet</option>
+          </select>
+        </div>
+        <button id="mute-btn" class="btn btn-icon-only" title="Toggle Sound (Hotkey: M)">
+          <span id="mute-icon">🔊</span>
+        </button>
+        <button id="help-btn" class="btn btn-icon-only" title="How to Play / Help">
+          <span>?</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Canvas Game Container (9:16 Aspect Ratio) -->
+    <main id="canvas-wrapper">
+      <canvas id="game-canvas" width="480" height="720"></canvas>
+    </main>
+
+    <!-- Bottom Controls & Hotkeys Footer -->
+    <footer id="bottom-bar">
+      <div class="touch-hint">Slide finger / mouse to steer paddle • Tap / Space to launch</div>
+      <div class="hotkeys-list">
+        <span class="hotkey-pill"><kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> Steer</span>
+        <span class="hotkey-pill"><kbd>SPACE</kbd> Launch</span>
+        <span class="hotkey-pill"><kbd>B</kbd> AI Bot</span>
+        <span class="hotkey-pill"><kbd>P</kbd> Pause</span>
+        <span class="hotkey-pill"><kbd>R</kbd> Restart</span>
+        <span class="hotkey-pill"><kbd>M</kbd> Mute</span>
+      </div>
+    </footer>
+
+    <!-- Help & Guide Modal Dialog -->
+    <div id="help-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="modal-title">HOW TO PLAY</h2>
+          <button id="close-help-btn" class="close-btn" aria-label="Close Help">&times;</button>
+        </div>
+        <div class="modal-body">
+          <section class="guide-section">
+            <h3>OBJECTIVE</h3>
+            <p>Clear all breakable bricks to advance to the next level. Penetrate dense corridors to trigger rapid satisfying chute ricochets!</p>
+          </section>
+
+          <section class="guide-section">
+            <h3>BRICK TYPES</h3>
+            <div class="brick-legend-grid">
+              <div class="legend-item"><span class="brick-swatch swatch-amber"></span> <b>Amber:</b> Regular (1 Hit)</div>
+              <div class="legend-item"><span class="brick-swatch swatch-orange"></span> <b>Orange:</b> Reinforced (2 Hits)</div>
+              <div class="legend-item"><span class="brick-swatch swatch-crimson"></span> <b>Crimson:</b> Titanium (3 Hits)</div>
+              <div class="legend-item"><span class="brick-swatch swatch-slate"></span> <b>Slate:</b> Chute Wall (Indestructible)</div>
+              <div class="legend-item"><span class="brick-swatch swatch-cyan"></span> <b>Cyan:</b> Speed Booster (+15%)</div>
+              <div class="legend-item"><span class="brick-swatch swatch-purple"></span> <b>Purple:</b> Bomb (3x3 Blast Radius)</div>
+            </div>
+          </section>
+
+          <section class="guide-section">
+            <h3>AUTONOMOUS BOT [B]</h3>
+            <p>Toggle the autonomous bot player at any time with the <b>[B]</b> key or <b>AI BOT</b> button. The bot uses analytical trajectory raycasting and obstacle lookahead to maintain continuous rallies with &ge;95% deflection accuracy.</p>
+          </section>
+        </div>
+        <div class="modal-footer">
+          <button id="dismiss-help-btn" class="btn btn-primary">LET'S PLAY</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./src/platform/browser/main.js"></script>
+</body>
+</html>

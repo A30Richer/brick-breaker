@@ -1,0 +1,9 @@
+{
+  "name": "brick_breaker",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A lightweight, high-performance Brick Breaker web game with dense levels, corridors, and autonomous bot.",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}

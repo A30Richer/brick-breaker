@@ -32,6 +32,7 @@ export class InputManager {
     this._onPointerDown = this.handlePointerDown.bind(this);
     this._onTouchMove = this.handleTouchMove.bind(this);
     this._onTouchStart = this.handleTouchStart.bind(this);
+    this._onBlur = this.reset.bind(this);
 
     this.attach();
   }
@@ -43,6 +44,7 @@ export class InputManager {
     if (this.win && typeof this.win.addEventListener === 'function') {
       this.win.addEventListener('keydown', this._onKeyDown);
       this.win.addEventListener('keyup', this._onKeyUp);
+      this.win.addEventListener('blur', this._onBlur);
     }
 
     if (this.targetElement && typeof this.targetElement.addEventListener === 'function') {
@@ -60,6 +62,7 @@ export class InputManager {
     if (this.win && typeof this.win.removeEventListener === 'function') {
       this.win.removeEventListener('keydown', this._onKeyDown);
       this.win.removeEventListener('keyup', this._onKeyUp);
+      this.win.removeEventListener('blur', this._onBlur);
     }
 
     if (this.targetElement && typeof this.targetElement.removeEventListener === 'function') {
@@ -108,6 +111,8 @@ export class InputManager {
     if (!e) return;
     const key = e.key;
     const code = e.code;
+    if (e.target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || '')) return;
+    if (e.target?.tagName === 'BUTTON' && (key === ' ' || key === 'Enter')) return;
 
     // Prevent default browser scrolling on game control keys
     if (key === ' ' || key === 'ArrowLeft' || key === 'ArrowRight' || key === 'ArrowUp' || key === 'ArrowDown') {
@@ -118,6 +123,9 @@ export class InputManager {
 
     this.keysDown.add(key.toLowerCase());
     if (code) this.keysDown.add(code.toLowerCase());
+
+    // Holding a steering key repeats movement; toggles only fire once per press.
+    if (e.repeat) return;
 
     // Edge triggers
     if (key === ' ' || code === 'Space') {

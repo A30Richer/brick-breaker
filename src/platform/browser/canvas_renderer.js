@@ -193,9 +193,20 @@ export class CanvasRenderer {
       } else if (ev.type === 'BOMB_CHAIN') {
         this.addBlast(ev.brick);
         if ((ev.depth || 0) >= 3) this.setNotice(`CHAIN ×${ev.depth}`, '#C084FC', 1.0);
+      } else if (ev.type === 'PICKUP_SPAWNED') {
+        const appearance = this.pickupAppearance(ev.pickup?.type);
+        if (appearance && !this.powerupNotice) {
+          this.setNotice(`CATCH ${appearance.label} WITH THE PADDLE`, appearance.color, 1.3);
+        }
+      } else if (ev.type === 'PICKUP_COLLECTED') {
+        const pickup = ev.pickup;
+        const appearance = this.pickupAppearance(pickup?.type);
+        if (pickup && appearance) this.emitExplosion(pickup.x, pickup.y, appearance.color, 16, 1.1);
+      } else if (ev.type === 'PICKUP_MISSED') {
+        if (ev.pickup) this.emitExplosion(ev.pickup.x, Math.min(this.height - 4, ev.pickup.y), '#64748B', 4, 0.4);
       } else if (ev.type === 'SHIELD_UP') {
         this.setNotice(`SHIELD  ·  ${Math.ceil(ev.seconds)}s`, '#7DD3FC');
-        if (ev.brick) this.emitExplosion(ev.brick.x + ev.brick.width / 2, ev.brick.y + ev.brick.height / 2, '#BAE6FD', 18, 1.4);
+        if (ev.brick && !ev.pickup) this.emitExplosion(ev.brick.x + ev.brick.width / 2, ev.brick.y + ev.brick.height / 2, '#BAE6FD', 18, 1.4);
       } else if (ev.type === 'SHIELD_HIT') {
         if (ev.ball && shieldSparks++ < 3) this.emitExplosion(ev.ball.x, ev.ball.y + ev.ball.radius, '#7DD3FC', 5, 0.6);
       } else if (ev.type === 'SEEKER_ON') {
@@ -208,7 +219,7 @@ export class CanvasRenderer {
           color,
           remaining: 1.8
         };
-        if (ev.brick) {
+        if (ev.brick && !ev.pickup) {
           this.emitExplosion(ev.brick.x + ev.brick.width / 2, ev.brick.y + ev.brick.height / 2, color, 20, 1.5);
         }
       }
@@ -298,6 +309,7 @@ export class CanvasRenderer {
     // 4. Shield floor, Ball Trails and Balls
     this.drawShield(ctx, state, width, height);
     this.drawBalls(ctx, state);
+    this.drawPickups(ctx, state);
 
     // 5. Paddle (with AI autonomous glow indicator)
     this.drawPaddle(ctx, state);
@@ -596,6 +608,52 @@ export class CanvasRenderer {
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
       ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  pickupAppearance(type) {
+    if (type === 7) return { label: '×2', color: '#84CC16' };
+    if (type === 8) return { label: '+3', color: '#EC4899' };
+    if (type === 9) return { label: 'S', color: '#7DD3FC' };
+    return null;
+  }
+
+  /** Falling bonuses use center coordinates, matching their paddle hitboxes. */
+  drawPickups(ctx, state) {
+    if (!Array.isArray(state.pickups) || state.pickups.length === 0) return;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 11px "Courier New", monospace';
+    for (const pickup of state.pickups) {
+      if (pickup.active === false || !Number.isFinite(pickup.x) || !Number.isFinite(pickup.y)) continue;
+      const appearance = this.pickupAppearance(pickup.type);
+      if (!appearance) continue;
+      const width = pickup.width ?? this.config.pickups?.width ?? 24;
+      const height = pickup.height ?? this.config.pickups?.height ?? 14;
+      const left = pickup.x - width / 2;
+      const top = pickup.y - height / 2;
+
+      // Short upward streaks make the falling direction clear without
+      // allocating a trail for every capsule spawned by a bomb cascade.
+      ctx.fillStyle = appearance.color;
+      for (let streak = 0; streak < 3; streak++) {
+        ctx.globalAlpha = 0.35 - streak * 0.09;
+        ctx.fillRect(pickup.x - 1, top - 5 - streak * 5, 2, 3);
+      }
+      ctx.globalAlpha = 1;
+      ctx.shadowColor = appearance.color;
+      ctx.shadowBlur = 9;
+      ctx.fillStyle = appearance.color;
+      drawRoundRect(ctx, left, top, width, height, height / 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#F8FAFC';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#0C0F1D';
+      ctx.fillText(appearance.label, pickup.x, pickup.y + 0.5);
     }
     ctx.restore();
   }

@@ -124,6 +124,12 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxBalls: 32, // Bound multiball growth and collision work per frame
     speedIncrementOnHit: 1.5 // px/s added on brick hit
   },
+  pickups: {
+    width: 24,
+    height: 14,
+    fallSpeed: 140, // px/s; special bricks drop bonuses the paddle must catch
+    maxPickups: 64
+  },
   physics: {
     subSteps: 8,
     maxSubSteps: 16,
@@ -133,14 +139,8 @@ export const DEFAULT_CONFIG = Object.freeze({
     antiStallThreshold: 0.25,
     microJitter: 0.05,
     chainDelay: 0.07, // seconds before a bomb caught in a blast detonates
-    // Balls home in on the last bricks (or after a long stall). Set to null to disable.
-    seeker: {
-      remainingBricks: 10,
-      remainingFraction: 0.015,
-      stallSeconds: 7,
-      turnRate: 4.5, // rad/s
-      minTotalBricks: 100
-    }
+    // Optional aim assistance at collisions only. Free flight is always straight.
+    seeker: null
   },
   grid: {
     cols: 32,

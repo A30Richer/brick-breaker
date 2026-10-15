@@ -19,6 +19,7 @@ export function createInitialState(customConfig = {}, levelDef = null) {
     arena: { ...DEFAULT_CONFIG.arena, ...(customConfig.arena || {}) },
     paddle: { ...DEFAULT_CONFIG.paddle, ...(customConfig.paddle || {}) },
     ball: { ...DEFAULT_CONFIG.ball, ...(customConfig.ball || {}) },
+    pickups: { ...DEFAULT_CONFIG.pickups, ...(customConfig.pickups || {}) },
     physics: { ...DEFAULT_CONFIG.physics, ...(customConfig.physics || {}) },
     grid: { ...DEFAULT_CONFIG.grid, ...(customConfig.grid || {}) },
     rules: { ...DEFAULT_CONFIG.rules, ...(customConfig.rules || {}) }
@@ -134,6 +135,8 @@ export function createInitialState(customConfig = {}, levelDef = null) {
     },
     balls,
     nextBallId: 2,
+    pickups: [], // Center-based falling rectangles: { id, type, x, y, width, height, vy, active, brickId, source }
+    nextPickupId: 1,
     bricks,
     fuses: [],
     shield: 0, // seconds of energy floor left

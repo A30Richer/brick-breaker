@@ -228,7 +228,7 @@ export class AudioSynth {
     if (!Array.isArray(events)) return;
     // Per-frame voice budget: a 32-ball swarm or a bomb cascade would
     // otherwise stack dozens of oscillators into one loud click.
-    const budget = { brick: 4, bomb: 1, wall: 2, shield: 1, lost: 1 };
+    const budget = { brick: 4, bomb: 1, wall: 2, shield: 1, lost: 1, pickup: 1, missed: 1 };
     const spend = key => (budget[key] > 0 ? budget[key]-- > 0 : false);
     for (const ev of events) {
       if (!ev) continue;
@@ -244,6 +244,12 @@ export class AudioSynth {
           break;
         case 'WALL_HIT':
           if (spend('wall')) this.playWallBounce();
+          break;
+        case 'PICKUP_SPAWNED':
+          if (spend('pickup')) this.playTone(740, 480, 0.09, 'sine', 0.25);
+          break;
+        case 'PICKUP_MISSED':
+          if (spend('missed')) this.playTone(220, 150, 0.08, 'sine', 0.12);
           break;
         case 'SHIELD_UP':
           this.playTone(520, 1040, 0.22, 'triangle', 0.7);

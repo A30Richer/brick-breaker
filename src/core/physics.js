@@ -355,8 +355,7 @@ function triggerBombExplosion(state, bombBrick, ball, config, pendingBalls, dept
             destroyed: true,
             source: 'BOMB_BLAST'
           });
-          events.push(...triggerMultiball(state, neighbor, ball, config, pendingBalls, 'BOMB_BLAST'));
-          events.push(...triggerShield(state, neighbor, config));
+          events.push(...spawnPickup(state, neighbor, config, 'BOMB_BLAST'));
         }
       }
     }
@@ -365,7 +364,7 @@ function triggerBombExplosion(state, bombBrick, ball, config, pendingBalls, dept
   return events;
 }
 
-/** SHIELD bricks raise (or extend) the energy floor under the paddle. */
+/** A collected SHIELD bonus raises (or extends) the energy floor. */
 function triggerShield(state, brick, config) {
   if (brick.type !== 9) return [];
   const rules = config.rules ?? DEFAULT_CONFIG.rules;
@@ -373,6 +372,81 @@ function triggerShield(state, brick, config) {
   const cap = rules.maxShieldSeconds ?? DEFAULT_CONFIG.rules.maxShieldSeconds;
   state.shield = Math.min(cap, (state.shield || 0) + seconds);
   return [{ type: 'SHIELD_UP', brick, seconds: state.shield }];
+}
+
+/** Special bricks release deterministic, serializable falling bonuses. */
+function spawnPickup(state, brick, config, source = 'BALL_HIT') {
+  if (![7, 8, 9].includes(brick.type)) return [];
+  if (!Array.isArray(state.pickups)) state.pickups = [];
+  const cfg = { ...DEFAULT_CONFIG.pickups, ...config.pickups };
+  if (state.pickups.filter(pickup => pickup.active !== false).length >= cfg.maxPickups) return [];
+  const highestId = Math.max(0, ...state.pickups.map(pickup => pickup.id || 0));
+  const id = Math.max(Number.isSafeInteger(state.nextPickupId) ? state.nextPickupId : 1, highestId + 1);
+  state.nextPickupId = id + 1;
+  const pickup = {
+    id,
+    type: brick.type,
+    x: Math.max(cfg.width / 2, Math.min(state.arena.width - cfg.width / 2, brick.x + brick.width / 2)),
+    y: brick.y + brick.height / 2,
+    width: cfg.width,
+    height: cfg.height,
+    vy: cfg.fallSpeed,
+    active: true,
+    brickId: brick.id,
+    source
+  };
+  state.pickups.push(pickup);
+  return [{ type: 'PICKUP_SPAWNED', pickup }];
+}
+
+/** Swept rectangle contact against the paddle moving during this substep. */
+function pickupContactTime(pickup, paddle, oldPaddleX, dt) {
+  const dx = oldPaddleX - paddle.x;
+  const dy = pickup.vy * dt;
+  const slab = (position, delta, minimum, maximum) => {
+    if (Math.abs(delta) < 1e-12) return position >= minimum && position <= maximum ? [-Infinity, Infinity] : [Infinity, -Infinity];
+    const first = (minimum - position) / delta;
+    const second = (maximum - position) / delta;
+    return [Math.min(first, second), Math.max(first, second)];
+  };
+  const [enterX, exitX] = slab(pickup.x, dx, oldPaddleX - pickup.width / 2, oldPaddleX + paddle.width + pickup.width / 2);
+  const [enterY, exitY] = slab(pickup.y, dy, paddle.y - pickup.height / 2, paddle.y + paddle.height + pickup.height / 2);
+  const enter = Math.max(0, enterX, enterY);
+  const exit = Math.min(1, exitX, exitY);
+  return enter <= exit ? enter : null;
+}
+
+/** Advance drops, collect on paddle contact, and remove missed bonuses. */
+function updatePickups(state, dt, config, pendingBalls, oldPaddleX) {
+  const events = [];
+  if (!Array.isArray(state.pickups) || !state.pickups.length) return events;
+  const liveBalls = [...state.balls, ...pendingBalls].filter(ball => ball.active && !ball.attachedToPaddle);
+  for (const pickup of state.pickups) {
+    if (pickup.active === false) continue;
+    const contact = liveBalls.length && pickup.vy > 0 ? pickupContactTime(pickup, state.paddle, oldPaddleX, dt) : null;
+    if (contact !== null) {
+      pickup.y += pickup.vy * dt * contact;
+      pickup.active = false;
+      const powerup = pickup.type === 7 ? 'BALL_DOUBLER' : pickup.type === 8 ? 'EXTRA_BALLS' : 'SHIELD';
+      events.push({ type: 'PICKUP_COLLECTED', pickup, powerup });
+      const brick = state.bricks.find(candidate => candidate.id === pickup.brickId) ?? {
+        id: pickup.brickId, type: pickup.type, x: pickup.x - pickup.width / 2,
+        y: pickup.y - pickup.height / 2, width: pickup.width, height: pickup.height
+      };
+      const effect = pickup.type === 9
+        ? triggerShield(state, brick, config)
+        : triggerMultiball(state, brick, liveBalls[0], config, pendingBalls, 'PICKUP');
+      events.push(...effect.map(event => ({ ...event, pickup, source: 'PICKUP' })));
+    } else {
+      pickup.y += pickup.vy * dt;
+      if (pickup.y - pickup.height / 2 > state.arena.height) {
+        pickup.active = false;
+        events.push({ type: 'PICKUP_MISSED', pickup });
+      }
+    }
+  }
+  state.pickups = state.pickups.filter(pickup => pickup.active !== false);
+  return events;
 }
 
 /** Detonates chained bombs whose fuse delay has elapsed this frame. */
@@ -388,7 +462,7 @@ function burnFuses(state, dt, config, pendingBalls) {
   for (const fuse of due) {
     const bomb = state.bricks[fuse.brickIndex];
     if (!bomb) continue;
-    // +3 bricks in the blast clone a live ball; prefer the one that lit the fuse.
+    // Preserve the source ball ID as the delayed cascade advances.
     const source = state.balls.find(ball => ball.id === fuse.ballId && ball.active && !ball.attachedToPaddle)
       ?? state.balls.find(ball => ball.active && !ball.attachedToPaddle)
       ?? pendingBalls[0]
@@ -400,105 +474,81 @@ function burnFuses(state, dt, config, pendingBalls) {
 }
 
 /**
- * Seeker finish: once only a handful of bricks remain, or nothing has broken
- * for a while, every free ball bends toward the nearest remaining brick.
- * Steering follows a cell distance field that routes around permanent walls,
- * so balls do not grind against a wall that hides their target.
+ * Optional aim assistance on bounce frames. Free flight never changes heading:
+ * constant angular pursuit of nearby grid cells used to create circular orbits.
+ * Any damage to a breakable brick counts as progress, including armor hits.
  */
-function updateSeeker(state, dt, config) {
-  const cfg = config.physics?.seeker === undefined ? DEFAULT_CONFIG.physics.seeker : config.physics.seeker;
+function updateSeeker(state, dt, config, events) {
+  const configured = config.physics?.seeker === undefined ? DEFAULT_CONFIG.physics.seeker : config.physics.seeker;
+  if (!configured) {
+    if (state.seeker) state.seeker.active = false;
+    return;
+  }
+  const cfg = {
+    remainingBricks: 10,
+    remainingFraction: 0.015,
+    stallSeconds: 7,
+    minTotalBricks: 100,
+    maxBounceAdjustment: Math.PI / 3,
+    ...configured
+  };
   const stats = state.stats;
-  if (!cfg || !state.grid?.cells || stats.totalBreakableBricks < cfg.minTotalBricks) return;
-
-  if (!state.seeker) state.seeker = { active: false, stall: 0, lastDestroyed: stats.bricksDestroyed, field: null, fieldAge: 0 };
+  if (stats.totalBreakableBricks < cfg.minTotalBricks) {
+    if (state.seeker) state.seeker.active = false;
+    return;
+  }
+  if (!state.seeker) state.seeker = { active: false, stall: 0, lastDestroyed: stats.bricksDestroyed };
   const seeker = state.seeker;
-  if (stats.bricksDestroyed !== seeker.lastDestroyed) {
+  const damagedBrick = events.some(event => event.type === 'BRICK_HIT' && event.damage > 0 && !event.indestructible);
+  if (damagedBrick || stats.bricksDestroyed !== seeker.lastDestroyed) {
     seeker.stall = 0;
-    seeker.lastDestroyed = stats.bricksDestroyed;
-    seeker.field = null;
   } else {
     seeker.stall += dt;
   }
-  const remaining = stats.remainingBreakableBricks;
+  seeker.lastDestroyed = stats.bricksDestroyed;
   const threshold = Math.max(cfg.remainingBricks, stats.totalBreakableBricks * cfg.remainingFraction);
-  seeker.active = remaining > 0 && (remaining <= threshold || seeker.stall >= cfg.stallSeconds);
+  seeker.active = stats.remainingBreakableBricks > 0 &&
+    (stats.remainingBreakableBricks <= threshold || seeker.stall >= cfg.stallSeconds);
   if (!seeker.active) return;
 
-  const { cols, rows, cellWidth, cellHeight, offsetX, offsetY, cells } = state.grid;
-  // Distance field over grid cells plus open virtual rows above (-1) and below (rows).
-  seeker.fieldAge += dt;
-  if (!seeker.field || seeker.fieldAge > 0.5) {
-    const field = new Array((rows + 2) * cols).fill(-1);
-    const queue = [];
-    const isWall = (r, c) => {
-      if (r < 0 || r >= rows) return false;
-      const brick = state.bricks[cells[r * cols + c]];
-      return Boolean(brick && brick.active && brick.indestructible);
-    };
-    for (const brick of state.bricks) {
-      if (!brick.active || brick.indestructible || brick.hp <= 0) continue;
-      const index = (brick.row + 1) * cols + brick.col;
-      if (field[index] === -1) {
-        field[index] = 0;
-        queue.push(index);
-      }
-    }
-    for (let head = 0; head < queue.length; head++) {
-      const index = queue[head];
-      const r = Math.floor(index / cols) - 1;
-      const c = index % cols;
-      for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        const nr = r + dr;
-        const nc = c + dc;
-        if (nr < -1 || nr > rows || nc < 0 || nc >= cols || isWall(nr, nc)) continue;
-        const next = (nr + 1) * cols + nc;
-        if (field[next] !== -1) continue;
-        field[next] = field[index] + 1;
-        queue.push(next);
-      }
-    }
-    seeker.field = field;
-    seeker.fieldAge = 0;
-  }
+  const bouncingBalls = new Set(events.filter(event =>
+    ['BRICK_HIT', 'WALL_HIT', 'PADDLE_HIT', 'SHIELD_HIT'].includes(event.type) && event.ball
+  ).map(event => event.ball));
+  if (bouncingBalls.size === 0) return;
 
-  const field = seeker.field;
-  const maxTurn = cfg.turnRate * dt;
-  for (const ball of state.balls) {
+  const targets = state.bricks.filter(brick => brick.active && !brick.indestructible && brick.hp > 0);
+  const maxAdjustment = Math.max(0, Math.min(Math.PI / 2, cfg.maxBounceAdjustment));
+  for (const ball of bouncingBalls) {
     if (!ball.active || ball.attachedToPaddle) continue;
-    const col = Math.max(0, Math.min(cols - 1, Math.floor((ball.x - offsetX) / cellWidth)));
-    const row = Math.max(-1, Math.min(rows, Math.floor((ball.y - offsetY) / cellHeight)));
-    const here = field[(row + 1) * cols + col];
-    if (here === undefined || here < 0) continue;
+    const speed = Math.hypot(ball.vx, ball.vy);
+    if (speed <= 0) continue;
+    const options = targets.map(brick => {
+      const dx = brick.x + brick.width / 2 - ball.x;
+      const dy = brick.y + brick.height / 2 - ball.y;
+      return { dx, dy, distance: Math.hypot(dx, dy) };
+    }).sort((a, b) => a.distance - b.distance);
 
-    // Aim at the best 8-neighbour (or the target itself when adjacent).
-    let best = null;
-    let bestDistance = here;
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        if (!dr && !dc) continue;
-        const nr = row + dr;
-        const nc = col + dc;
-        if (nr < -1 || nr > rows || nc < 0 || nc >= cols) continue;
-        const distance = field[(nr + 1) * cols + nc];
-        if (distance < 0 || distance >= bestDistance) continue;
-        // Diagonal moves must not cut a wall corner.
-        if (dr && dc && (field[(row + 1 + dr) * cols + col] < 0 || field[(row + 1) * cols + nc] < 0)) continue;
-        best = [nr, nc];
-        bestDistance = distance;
-      }
+    for (const option of options.slice(0, 24)) {
+      if (option.distance <= ball.radius) continue;
+      // Preserve the outgoing side of the bounce instead of steering back
+      // into the surface that was just hit.
+      const alignment = (option.dx * ball.vx + option.dy * ball.vy) / (option.distance * speed);
+      if (alignment < Math.cos(maxAdjustment)) continue;
+      const bounds = {
+        minX: Math.min(ball.x, ball.x + option.dx) - ball.radius,
+        maxX: Math.max(ball.x, ball.x + option.dx) + ball.radius,
+        minY: Math.min(ball.y, ball.y + option.dy) - ball.radius,
+        maxY: Math.max(ball.y, ball.y + option.dy) + ball.radius
+      };
+      const blocked = querySpatialGrid(state.grid, state.bricks, bounds).some(brick =>
+        brick.indestructible && sweptCircleAABB(ball.x, ball.y, option.dx, option.dy, ball.radius, brick)
+      );
+      if (blocked) continue;
+      ball.vx = option.dx / option.distance * speed;
+      ball.vy = option.dy / option.distance * speed;
+      applyAntiStall(ball, config.physics?.minVerticalSpeedRatio, config.physics?.microJitter);
+      break;
     }
-    if (!best && here > 0) continue;
-    const [tr, tc] = best ?? [row, col];
-    const tx = offsetX + (tc + 0.5) * cellWidth;
-    const ty = offsetY + (tr + 0.5) * cellHeight;
-    const desired = Math.atan2(ty - ball.y, tx - ball.x);
-    const current = Math.atan2(ball.vy, ball.vx);
-    let delta = desired - current;
-    delta = Math.atan2(Math.sin(delta), Math.cos(delta));
-    const turned = current + Math.max(-maxTurn, Math.min(maxTurn, delta));
-    const speed = Math.hypot(ball.vx, ball.vy) || ball.speed;
-    ball.vx = Math.cos(turned) * speed;
-    ball.vy = Math.sin(turned) * speed;
   }
 }
 
@@ -646,6 +696,7 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
   // Execute sub-steps
   for (let step = 0; step < numSubSteps; step++) {
     // 1. Paddle movement integration
+    const oldPaddleX = state.paddle.x;
     updatePaddle(state.paddle, inputAction, subDt, arenaWidth);
 
     // 2. Ball simulation
@@ -832,11 +883,14 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
             events.push(...brickEvents);
           }
 
-          // Consume collision fraction from remaining step time
-          remainingT -= earliestHit.t;
+          // TOI is relative to the current remainder, not the full substep.
+          remainingT *= 1 - earliestHit.t;
           bounces++;
         }
       }
+    }
+    if (state.status === GAME_STATUS.PLAYING) {
+      events.push(...updatePickups(state, subDt, config, pendingBalls, oldPaddleX));
     }
   }
 
@@ -850,7 +904,7 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
   }
   if (state.status === GAME_STATUS.PLAYING) {
     const wasSeeking = Boolean(state.seeker?.active);
-    updateSeeker(state, clampedDt, config);
+    updateSeeker(state, clampedDt, config, events);
     if (!wasSeeking && state.seeker?.active) events.push({ type: 'SEEKER_ON' });
   }
 
@@ -860,6 +914,8 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
   const activeBalls = [...state.balls.filter(ball => ball.active), ...pendingBalls];
   // Life loss & Game Over check if all balls are lost
   if (activeBalls.length === 0 && state.status === GAME_STATUS.PLAYING) {
+    state.pickups = [];
+    state.shield = 0;
     state.lives--;
     if (state.lives <= 0) {
       state.status = GAME_STATUS.GAME_OVER;
@@ -1000,8 +1056,7 @@ function resolveBrickHit(state, brick, ball, config, pendingBalls) {
       const blastEvents = triggerBombExplosion(state, brick, ball, config, pendingBalls);
       events.push(...blastEvents);
     }
-    events.push(...triggerMultiball(state, brick, ball, config, pendingBalls));
-    events.push(...triggerShield(state, brick, config));
+    events.push(...spawnPickup(state, brick, config));
   } else {
     // Damaged but not yet destroyed
     events.push({

@@ -6,6 +6,7 @@
  * - Headless obstacle lookahead micro-simulation against solid bricks in state.grid
  * - Proportional steering towards predicted intercept with deadband (~1.5px) to eliminate high-frequency chatter
  * - Multi-ball threat prioritization using Time-To-Impact (TTI)
+ * - Falling bonus collection only when paddle travel and ball return time are safe
  * - Idle centering: smoothly guides paddle towards screen center when ball is ascending (vy <= 0)
  * - Auto-launch ball when in READY state
  * 
@@ -204,6 +205,81 @@ export function predictBallLanding(ball, state, config = DEFAULT_CONFIG) {
 }
 
 /**
+ * Finds a falling capsule the paddle can catch and still leave time to save
+ * every approaching ball. Coordinates on pickups are their center points.
+ * Ascending balls can hit an unseen brick at any moment, so reserve enough
+ * time to reach either side after collecting rather than assuming a long flight.
+ *
+ * @returns {{ pickupId: number, targetX: number, catchTime: number }|null}
+ */
+export function findSafePickupTarget(state, dt = 1 / 60, config = DEFAULT_CONFIG) {
+  if (state?.status !== GAME_STATUS.PLAYING || !Array.isArray(state.pickups) || !state.pickups.length) return null;
+
+  const paddle = state.paddle;
+  const arenaWidth = state.arena?.width ?? DEFAULT_CONFIG.arena.width;
+  if (!paddle || !Number.isFinite(paddle.x) || !Number.isFinite(paddle.y)) return null;
+  const halfPaddle = paddle.width / 2;
+  const minCenter = halfPaddle;
+  const maxCenter = arenaWidth - halfPaddle;
+  const center = paddle.x + halfPaddle;
+  const speed = paddle.speed ?? config.paddle?.speed ?? DEFAULT_CONFIG.paddle.speed;
+  if (!Number.isFinite(speed) || speed <= 0 || maxCenter < minCenter) return null;
+  const frameTime = Number.isFinite(dt) && dt > 0 ? Math.min(dt, 0.05) : 1 / 60;
+  const margin = Math.max(frameTime * 2, 1 / 30);
+  const balls = (state.balls ?? []).filter(ball => ball?.active && !ball.attachedToPaddle);
+  if (!balls.length) return null;
+
+  const threats = [];
+  for (const ball of balls) {
+    const radius = ball.radius ?? config.ball?.radius ?? DEFAULT_CONFIG.ball.radius;
+    const targetY = paddle.y - radius;
+    if (![ball.x, ball.y, ball.vx, ball.vy].every(Number.isFinite)) return null;
+    if (ball.vy > 0) {
+      // A ball at the paddle plane needs the paddle now; a falling bonus waits.
+      const time = (targetY - ball.y) / ball.vy;
+      if (time <= 0.25) return null;
+      const landing = predictBallLanding(ball, state, config);
+      threats.push({ time, landing: Math.max(minCenter, Math.min(maxCenter, landing)) });
+    } else {
+      const ballSpeed = Math.hypot(ball.vx, ball.vy) || ball.speed;
+      if (!Number.isFinite(ballSpeed) || ballSpeed <= 0) return null;
+      threats.push({ time: Math.max(0, (targetY - ball.y) / ballSpeed), landing: null });
+    }
+  }
+
+  let best = null;
+  for (const pickup of state.pickups) {
+    if (!pickup || pickup.active === false || ![7, 8, 9].includes(pickup.type)) continue;
+    const width = pickup.width ?? config.pickups?.width ?? 24;
+    const height = pickup.height ?? config.pickups?.height ?? 14;
+    const fallSpeed = pickup.vy ?? config.pickups?.fallSpeed ?? 140;
+    if (![pickup.x, pickup.y, width, height, fallSpeed].every(Number.isFinite) || width <= 0 || height <= 0 || fallSpeed <= 0) continue;
+    // A small overlap is enough; do not cross the entire arena to center a drop.
+    const left = Math.max(minCenter, pickup.x - width / 2 - halfPaddle + 2);
+    const right = Math.min(maxCenter, pickup.x + width / 2 + halfPaddle - 2);
+    if (left > right) continue;
+    const targetX = Math.max(left, Math.min(right, center));
+    const travelTime = Math.abs(targetX - center) / speed;
+    const enters = (paddle.y - height / 2 - pickup.y) / fallSpeed;
+    const leaves = (paddle.y + paddle.height + height / 2 - pickup.y) / fallSpeed;
+    const catchTime = Math.max(0, enters, travelTime + frameTime);
+    if (catchTime + frameTime > leaves) continue;
+
+    const safe = threats.every(threat => {
+      const returnDistance = threat.landing === null
+        ? Math.max(targetX - minCenter, maxCenter - targetX)
+        : Math.abs(targetX - threat.landing);
+      return catchTime + returnDistance / speed + margin <= threat.time;
+    });
+    if (!safe) continue;
+    const cost = catchTime + travelTime / 4;
+    if (!best || cost < best.cost) best = { pickupId: pickup.id, targetX, catchTime, cost };
+  }
+  if (!best) return null;
+  return { pickupId: best.pickupId, targetX: best.targetX, catchTime: best.catchTime };
+}
+
+/**
  * Computes autonomous bot action for the current simulation frame.
  *
  * @param {Object} state - Pure GameState object.
@@ -259,6 +335,9 @@ export function computeBotAction(state, dt = 1 / 60, config = DEFAULT_CONFIG) {
     }
   }
 
+  const pickup = findSafePickupTarget(state, dt, config);
+  if (pickup) targetX = pickup.targetX;
+
   // Proportional steering with deadband (~1.5px) to eliminate high-frequency chatter
   const diff = targetX - paddleCenter;
   const inDeadband = Math.abs(diff) <= DEADBAND_PIXELS;
@@ -283,5 +362,6 @@ export default {
   foldTrajectory,
   findMostUrgentBall,
   predictBallLanding,
+  findSafePickupTarget,
   computeBotAction
 };

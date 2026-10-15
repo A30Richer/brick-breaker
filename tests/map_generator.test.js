@@ -140,10 +140,22 @@ test('engine random runs generate the next map on clear instead of ending in vic
 
 test('the bot makes real progress on a generated map in headless autoplay', () => {
   const def = generateMap({ seed: 'autoplay-check', difficulty: 'chill' });
-  const run = simulateLevel(def, { maxSeconds: 60 });
+  let spawned = 0;
+  let collected = 0;
+  // Measure the full drop-and-catch loop with straight flight. Bonuses no longer
+  // activate immediately, and finishing does not receive automatic homing.
+  const run = simulateLevel(def, {
+    maxSeconds: 90,
+    onFrame(state, events) {
+      spawned += events.filter(event => event.type === 'PICKUP_SPAWNED').length;
+      collected += events.filter(event => event.type === 'PICKUP_COLLECTED').length;
+    }
+  });
   assert.equal(run.gameOver, false);
-  assert.ok(run.percent >= 25, `cleared ${run.percent}% in 60 s`);
-  assert.ok(run.maxBalls > 1, 'multiball kicked in');
+  assert.equal(run.livesLost, 0, 'collecting bonuses must preserve the last ball on this fixture');
+  assert.ok(run.percent >= 25, `cleared ${run.percent}% in 90 s`);
+  assert.ok(spawned > 0 && collected > 0, 'the real bot collects bonuses released by bricks');
+  assert.ok(run.maxBalls > 1 && run.multiballs > 0, 'caught bonuses activate multiball');
   assert.ok(run.paddleHits > 0);
   assert.equal(run.totalBricks, def.stats.breakables);
   assert.ok(BRICK_TYPES.SHIELD === 9);

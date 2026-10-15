@@ -7,13 +7,13 @@ A lightweight, high-performance Brick Breaker web game built with **Pure HTML5 C
 ## 🌟 Key Features
 
 - **🎮 Satisfying Corridor Gameplay**: Balls penetrate narrow 15px vertical chutes and 11px horizontal passages flanked by indestructible slate walls, triggering rapid ricochets through dense brick vaults.
-- **🤖 Autonomous AI Bot (Hotkey: `B`)**: Predictive bot using analytical trajectory raycasting, modular wall reflection folding, and obstacle lookahead. In multiball play it prioritizes the descending ball with the shortest time to the paddle. Opposing simultaneous arrivals can still cost balls.
+- **🤖 Autonomous AI Bot (Hotkey: `B`)**: Predictive bot using analytical trajectory raycasting, modular wall reflection folding, and obstacle lookahead. It saves incoming balls first and catches falling bonuses when there is time to return safely. Opposing simultaneous arrivals can still cost balls.
 - **🗺️ Ten Maps**: The original five corridor maps plus five harder bot challenges with dense titanium armor, offset gates, layered vaults, and faster launches (540–620 px/s).
 - **🎲 Endless Random Maps**: A seeded generator composes every map from 14 field motifs (rings, spiral, waves, skyline, pixel-art sprites, …), 3 symmetry modes, 9 wall structures (chutes, funnels, vaults, orbit rings, …), bomb fuses, powerups, and 12 color palettes. The same seed always rebuilds the same map; an endless run never repeats a layout, and neighbouring maps never share a motif or palette. Every map is checked so walls never seal a brick.
 - **💣 Chain Reactions**: A bomb caught in a blast detonates 0.07 s later, so touching bombs roll across the field as a cascade.
-- **🛡️ Shield Bricks**: Blue `S` bricks raise an energy floor under the paddle for 9 s (stacking to 18 s); balls bounce off it instead of being lost.
-- **🎯 Seeker Finish**: When ≤10 bricks (or ≤1.5%) remain, or nothing has broken for 7 s, balls turn pink and steer toward the remaining bricks along a path that avoids walls. Only applies to maps with ≥100 bricks.
-- **🟢 ×2 / 🩷 +3 Multiball**: Lime `×2` bricks double the active ball count; pink `+3` bricks add exactly three balls. Breaking the brick activates the effect immediately, including bomb blasts. New balls fan out at the source ball's speed. Both types appear in every new challenge map.
+- **🛡️ Shield Bonuses**: Break a blue `S` brick and catch its falling capsule to raise an energy floor for 9 s (stacking to 18 s); balls bounce off it instead of being lost.
+- **🟢 ×2 / 🩷 +3 Multiball**: Break lime `×2` or pink `+3` bricks, including with bombs, to release falling capsules. Catch them with the paddle to double the active ball count or add three balls. Missing a capsule gives no bonus. Both types appear in every new challenge map.
+- **↗️ Straight Ball Physics**: Balls travel straight between collisions, including while the bot is active.
 - **⚡ Ultra Lightweight & High Performance**: 60 FPS silky smooth gameplay in modern browsers with zero third-party npm runtime dependencies. Headless simulation throughput exceeds **14,000 FPS**.
 - **🔊 Procedural Web Audio API**: Dynamic retro sound synthesizer generating sound effects for wall bounces, brick destruction, chute ricochets, bomb explosions, and victory fanfares without external audio files.
 - **💥 Multi-Tier Brick Physics**:
@@ -23,9 +23,9 @@ A lightweight, high-performance Brick Breaker web game built with **Pure HTML5 C
   - **Slate (Indestructible)**: Guide rails and corridor walls.
   - **Cyan (+15% Speed)**: Speed booster trigger.
   - **Purple (Bomb)**: 3x3 explosive blast radius.
-  - **Lime (×2)**: Double active balls, subject to the ball limit.
-  - **Pink (+3)**: Add three balls, subject to the ball limit.
-  - **Blue (Shield)**: Energy floor under the paddle for 9 s.
+  - **Lime (×2)**: Drops a capsule that doubles active balls when caught, subject to the ball limit.
+  - **Pink (+3)**: Drops a capsule that adds three balls when caught, subject to the ball limit.
+  - **Blue (Shield)**: Drops a capsule that raises an energy floor for 9 s when caught.
 - **☁️ Cloud & Colab Ready**: Clean decoupled architecture separating game simulation/physics state from canvas rendering, making it straightforward to run headless on Google Colab or connect automated gameplay recorders.
 
 ---
@@ -62,7 +62,7 @@ The challenge maps use the existing 4.5 px ball radius: a one-column vertical ch
 
 ![The five new bot challenge maps](docs/bot-challenge-maps.png)
 
-The default maximum is **32 active balls**, configurable with `ball.maxBalls`. If a powerup would exceed that limit, it adds only the available slots. A dropped ball is removed; a life is lost only after the last ball disappears. Restarting or changing maps resets the swarm to one ball and preserves the existing score/lives/bot rules.
+Catch falling capsules with the paddle to activate their bonuses. The default maximum is **32 active balls**, configurable with `ball.maxBalls`. If a collected bonus would exceed that limit, it adds only the available slots. A dropped ball is removed; a life is lost only after the last ball disappears. Restarting or changing maps clears falling capsules and resets the swarm to one ball while preserving the existing score/lives/bot rules.
 
 ---
 
@@ -111,7 +111,7 @@ const result = simulateLevel(run.next(), { maxSeconds: 120 });            // bot
 // result: { cleared, seconds, percent, maxBalls, longestChain, ballsLost, ... }
 ```
 
-Bot results on generated maps (`npm run test:generated`, 12 seeds each, 240 s budget): chill clears 11/12 (median 65 s), normal 9/12 (median 126 s), hard 5/12.
+Use `npm run test:generated` to measure bot progress with the current physics and collectible bonuses; completion time depends on the seed and difficulty.
 
 ---
 
@@ -174,7 +174,7 @@ brick_breaker/
 │   │   ├── levels.js          # High-density level matrices (L1–L10)
 │   │   ├── map_generator.js   # Seeded procedural maps and endless MapSequence
 │   │   ├── map_theme.js       # Palettes and themed brick colors
-│   │   ├── physics.js         # CCD, chain bombs, shields, seeker steering
+│   │   ├── physics.js         # CCD, falling bonuses, chain bombs, shields
 │   │   ├── rng.js             # Seeded PRNG and seed codes
 │   │   └── state.js           # Immutable state management & serialization
 │   └── platform/

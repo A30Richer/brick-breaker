@@ -34,6 +34,7 @@ export class GameEngine {
       arena: { ...DEFAULT_CONFIG.arena, ...(config?.arena || {}) },
       paddle: { ...DEFAULT_CONFIG.paddle, ...(config?.paddle || {}) },
       ball: { ...DEFAULT_CONFIG.ball, ...(config?.ball || {}) },
+      pickups: { ...DEFAULT_CONFIG.pickups, ...(config?.pickups || {}) },
       physics: { ...DEFAULT_CONFIG.physics, ...(config?.physics || {}) },
       grid: { ...DEFAULT_CONFIG.grid, ...(config?.grid || {}) },
       rules: { ...DEFAULT_CONFIG.rules, ...(config?.rules || {}) }

@@ -64,9 +64,16 @@ test('bombs caught in a blast detonate one after another as a chain', () => {
   assert.doesNotThrow(() => deserializeState(serializeState(state)));
 });
 
-test('a shield brick raises an energy floor that returns balls until it expires', () => {
+test('catching a shield bonus raises an energy floor that returns balls until it expires', () => {
   const state = makeState(['9000000001']);
   const events = strike(state, state.bricks[0]);
+  assert.equal(state.shield, 0, 'breaking the brick only releases the falling shield');
+  assert.equal(events.some(event => event.type === 'SHIELD_UP'), false);
+  const pickup = state.pickups[0];
+  assert.equal(pickup.type, 9);
+  pickup.x = state.paddle.x + state.paddle.width / 2;
+  pickup.y = state.paddle.y - pickup.height / 2 - 1;
+  events.push(...stepPhysics(state, {}, 1 / 60, TEST_CONFIG));
   assert.ok(events.some(event => event.type === 'SHIELD_UP' && event.seconds === DEFAULT_CONFIG.rules.shieldSeconds));
   assert.ok(Math.abs(state.shield - DEFAULT_CONFIG.rules.shieldSeconds) < 0.05);
 
@@ -88,38 +95,24 @@ test('a shield brick raises an energy floor that returns balls until it expires'
   assert.ok(fall.some(event => event.type === 'BALL_LOST'), 'without the shield the ball is lost again');
 });
 
-test('seeker mode bends balls toward the last bricks without changing their speed', () => {
+test('last bricks do not bend balls during collision-free flight', () => {
   const layout = Array.from({ length: 12 }, () => '1111111111');
   const state = makeState(layout);
-  const keep = new Set([0, 1]);
   state.bricks.forEach((brick, index) => {
-    if (keep.has(index)) return;
+    if (index < 2) return;
     brick.active = false;
     brick.hp = 0;
     state.grid.cells[brick.row * state.grid.cols + brick.col] = -1;
   });
-  state.stats.bricksDestroyed = state.bricks.length - keep.size;
-  state.stats.remainingBreakableBricks = keep.size;
+  state.stats.bricksDestroyed = state.bricks.length - 2;
+  state.stats.remainingBreakableBricks = 2;
   state.status = GAME_STATUS.PLAYING;
-
-  // The remaining bricks sit top-left; send the ball horizontally to the right.
   const ball = state.balls[0];
   Object.assign(ball, { attachedToPaddle: false, x: 300, y: 400, vx: 400, vy: -60 });
-  const speed = Math.hypot(ball.vx, ball.vy);
-  const before = Math.atan2(ball.vy, ball.vx);
   const events = stepPhysics(state, {}, 1 / 60, TEST_CONFIG);
-  assert.ok(events.some(event => event.type === 'SEEKER_ON'));
-  assert.equal(state.seeker.active, true);
-  const after = Math.atan2(ball.vy, ball.vx);
-  assert.ok(after < before, 'the heading turns toward the targets above');
-  assert.ok(before - after <= DEFAULT_CONFIG.physics.seeker.turnRate / 60 + 1e-9, 'turning is rate limited');
-  assert.ok(Math.abs(Math.hypot(ball.vx, ball.vy) - speed) < 1e-9);
-
-  const small = makeState(['1100000000']);
-  small.status = GAME_STATUS.PLAYING;
-  Object.assign(small.balls[0], { attachedToPaddle: false, x: 300, y: 400, vx: 400, vy: -60 });
-  stepPhysics(small, {}, 1 / 60, TEST_CONFIG);
-  assert.ok(!small.seeker?.active, 'tiny test layouts are never steered');
+  assert.equal(events.some(event => event.type === 'SEEKER_ON'), false);
+  assert.equal(ball.vx, 400);
+  assert.equal(ball.vy, -60);
 });
 
 function recordingCanvas() {

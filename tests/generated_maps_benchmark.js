@@ -18,7 +18,18 @@ export function runGeneratedMapsBenchmark({ maps = 12, maxSeconds = 240, quiet =
     const runs = [];
     for (let i = 0; i < maps; i++) {
       const def = generateMap({ seed: `bench-${i}`, difficulty });
-      const run = simulateLevel(def, { maxSeconds });
+      const pickups = { spawned: 0, collected: 0, missed: 0 };
+      const run = simulateLevel(def, {
+        maxSeconds,
+        onFrame(_state, events) {
+          for (const event of events) {
+            if (event.type === 'PICKUP_SPAWNED') pickups.spawned++;
+            if (event.type === 'PICKUP_COLLECTED') pickups.collected++;
+            if (event.type === 'PICKUP_MISSED') pickups.missed++;
+          }
+        },
+      });
+      run.pickups = pickups;
       runs.push(run);
       if (run.gameOver) failures.push(`${difficulty} ${def.seed}: game over`);
       if (run.bricksDestroyed === 0) failures.push(`${difficulty} ${def.seed}: no bricks destroyed`);
@@ -34,6 +45,9 @@ export function runGeneratedMapsBenchmark({ maps = 12, maxSeconds = 240, quiet =
       medianPercent: percents[Math.floor(maps / 2)],
       peakBalls: Math.max(...runs.map(run => run.maxBalls)),
       longestChain: Math.max(...runs.map(run => run.longestChain)),
+      pickupsSpawned: runs.reduce((sum, run) => sum + run.pickups.spawned, 0),
+      pickupsCollected: runs.reduce((sum, run) => sum + run.pickups.collected, 0),
+      pickupsMissed: runs.reduce((sum, run) => sum + run.pickups.missed, 0),
     });
   }
   if (!quiet) {

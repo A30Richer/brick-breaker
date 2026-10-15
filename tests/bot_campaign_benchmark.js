@@ -33,6 +33,9 @@ export function runBotCampaignBenchmark({ framesPerLevel = 10000, quiet = false 
       ballsLost: 0,
       livesLost: 0,
       maxBalls: 1,
+      pickupsSpawned: 0,
+      pickupsCollected: 0,
+      pickupsMissed: 0,
       powerups: {},
       status: GAME_STATUS.READY,
     };
@@ -50,6 +53,9 @@ export function runBotCampaignBenchmark({ framesPerLevel = 10000, quiet = false 
           if (event.type === 'PADDLE_HIT') metrics.paddleHits++;
           if (event.type === 'BALL_LOST') metrics.ballsLost++;
           if (event.type === 'LIFE_LOST' || event.type === 'GAME_OVER') metrics.livesLost++;
+          if (event.type === 'PICKUP_SPAWNED') metrics.pickupsSpawned++;
+          if (event.type === 'PICKUP_COLLECTED') metrics.pickupsCollected++;
+          if (event.type === 'PICKUP_MISSED') metrics.pickupsMissed++;
           if (event.type === 'MULTIBALL') {
             const kind = event.kind ?? event.powerup ?? 'multiball';
             metrics.powerups[kind] = (metrics.powerups[kind] ?? 0) + 1;

@@ -25,7 +25,7 @@ function makeState(layout = ['7000000001']) {
   });
 }
 
-function strike(state, brick, config = TEST_CONFIG) {
+function strike(state, brick, config = TEST_CONFIG, collect = true) {
   const ball = state.balls.find(candidate => candidate.active);
   state.status = GAME_STATUS.PLAYING;
   Object.assign(ball, {
@@ -35,7 +35,15 @@ function strike(state, brick, config = TEST_CONFIG) {
     vy: -ball.speed,
     attachedToPaddle: false
   });
-  return stepPhysics(state, {}, 1 / 60, config);
+  const events = stepPhysics(state, {}, 1 / 60, config);
+  if (collect && state.pickups.length) {
+    for (const pickup of state.pickups) {
+      pickup.x = state.paddle.x + state.paddle.width / 2;
+      pickup.y = state.paddle.y - pickup.height / 2 - 1;
+    }
+    events.push(...stepPhysics(state, {}, 1 / 60, config));
+  }
+  return events;
 }
 
 function assertHealthyBalls(state) {
@@ -57,7 +65,14 @@ test('x2 destroys its brick once, doubles 1 to 2, and preserves speed with a dis
   assert.equal(powerBrick.hp, 1);
   assert.equal(powerBrick.points, 350);
 
-  const events = strike(state, powerBrick);
+  const events = strike(state, powerBrick, TEST_CONFIG, false);
+  assert.equal(state.balls.length, 1, 'destruction releases a drop without applying its bonus');
+  assert.equal(events.some(event => event.type === 'MULTIBALL'), false);
+  assert.equal(state.pickups.length, 1);
+  const pickup = state.pickups[0];
+  pickup.x = state.paddle.x + state.paddle.width / 2;
+  pickup.y = state.paddle.y - pickup.height / 2 - 1;
+  events.push(...stepPhysics(state, {}, 1 / 60, TEST_CONFIG));
   assert.equal(state.balls.length, 2);
   assert.equal(powerBrick.active, false);
   assert.equal(state.score, 350);
@@ -74,8 +89,8 @@ test('x2 destroys its brick once, doubles 1 to 2, and preserves speed with a dis
   assertHealthyBalls(state);
 
   // New balls stay at their spawn position for this tick; they start moving next tick.
-  assert.ok(Math.abs(state.balls[1].y - (powerBrick.y + powerBrick.height + state.balls[1].radius + 0.05)) < 1e-9);
-  assert.ok(state.balls[0].y > state.balls[1].y);
+  assert.equal(state.balls[1].y, state.balls[0].y);
+  assert.equal(state.balls[1].x, state.balls[0].x);
   const nextEvents = strike(state, powerBrick);
   assert.equal(state.balls.length, 2);
   assert.equal(state.score, 350);
@@ -137,14 +152,15 @@ test('both powers obey the configurable limit, including a full default 32-ball 
   assert.equal(state.stats.bricksDestroyed, 1);
 });
 
-test('bomb destruction activates neighboring powers once and counts pending births in x2', () => {
+test('bomb destruction drops neighboring powers once; catching them counts pending births in x2', () => {
   const state = makeState(['0870000001', '4600000000', '0000000000']);
   const events = strike(state, state.bricks.find(brick => brick.type === 6));
   const powers = events.filter(event => event.type === 'MULTIBALL');
   assert.deepEqual(powers.map(event => event.powerup), ['EXTRA_BALLS', 'BALL_DOUBLER']);
   assert.deepEqual(powers.map(event => event.spawnedCount), [3, 4]);
   assert.deepEqual(powers.map(event => event.activeCount), [4, 8]);
-  assert.ok(powers.every(event => event.source === 'BOMB_BLAST'));
+  assert.ok(powers.every(event => event.source === 'PICKUP'));
+  assert.equal(events.filter(event => event.type === 'PICKUP_SPAWNED' && event.pickup.source === 'BOMB_BLAST').length, 2);
   assert.equal(state.balls.length, 8);
   assert.equal(state.stats.bricksDestroyed, 3);
   assert.equal(state.stats.remainingBreakableBricks, 1);

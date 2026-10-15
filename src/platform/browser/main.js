@@ -33,6 +33,8 @@ export class AppShell {
     this.fixedStep = false;
     this.accumulator = 0;
     this.lastMapFingerprint = null;
+    this.helpPausedGame = false;
+    this.helpPreviousFocus = null;
 
     // DOM UI elements
     this.dom = {
@@ -176,7 +178,21 @@ export class AppShell {
   /** Remembers each generated map and keeps ?seed= in the address bar for replay. */
   trackGeneratedMap(state) {
     const map = state?.map;
-    if (!map || map.fingerprint === this.lastMapFingerprint) return;
+    if (!map) {
+      const params = new URLSearchParams(window.location.search);
+      const level = String((state?.levelIndex ?? 0) + 1);
+      if (this.lastMapFingerprint || params.has('seed') || params.has('random') || params.has('difficulty') ||
+          (params.has('level') && params.get('level') !== level)) {
+        params.delete('seed');
+        params.delete('random');
+        params.delete('difficulty');
+        params.set('level', level);
+        window.history?.replaceState?.(null, '', `${window.location.pathname}?${params}`);
+      }
+      this.lastMapFingerprint = null;
+      return;
+    }
+    if (map.fingerprint === this.lastMapFingerprint) return;
     this.lastMapFingerprint = map.fingerprint;
     this.rememberMap(map.fingerprint);
     if (map.runSeed && window.history?.replaceState) {
@@ -263,6 +279,7 @@ export class AppShell {
 
     // Hotkeys for mute (M) and a new random map (N)
     window.addEventListener('keydown', (e) => {
+      if (e.repeat || e.target?.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName || '')) return;
       if (e.key === 'n' || e.key === 'N') {
         this.newRandomMap();
         this.syncUI();
@@ -277,15 +294,50 @@ export class AppShell {
 
     // Help modal toggles
     const openHelp = () => {
-      if (this.dom.helpModal) this.dom.helpModal.classList.remove('hidden');
+      if (!this.dom.helpModal || !this.dom.helpModal.classList.contains('hidden')) return;
+      this.helpPreviousFocus = document.activeElement;
+      this.helpPausedGame = this.engine.getState().status === GAME_STATUS.PLAYING;
+      if (this.helpPausedGame) this.engine.togglePause();
+      this.input?.reset();
+      this.dom.helpModal.classList.remove('hidden');
+      this.dom.closeHelpBtn?.focus();
+      this.syncUI();
     };
     const closeHelp = () => {
-      if (this.dom.helpModal) this.dom.helpModal.classList.add('hidden');
+      if (!this.dom.helpModal || this.dom.helpModal.classList.contains('hidden')) return;
+      this.dom.helpModal.classList.add('hidden');
+      this.input?.reset();
+      if (this.helpPausedGame && this.engine.getState().status === GAME_STATUS.PAUSED) this.engine.togglePause();
+      this.helpPausedGame = false;
+      this.helpPreviousFocus?.focus?.();
+      this.helpPreviousFocus = null;
+      this.syncUI();
     };
+
+    // Read the guide without advancing the game or triggering shortcuts behind it.
+    window.addEventListener('keydown', e => {
+      if (!this.dom.helpModal || this.dom.helpModal.classList.contains('hidden')) return;
+      e.stopImmediatePropagation();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeHelp();
+      } else if (e.key === 'Tab') {
+        const first = this.dom.closeHelpBtn;
+        const last = this.dom.dismissHelpBtn;
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
+    }, true);
 
     if (this.dom.helpBtn) this.dom.helpBtn.addEventListener('click', openHelp);
     if (this.dom.closeHelpBtn) this.dom.closeHelpBtn.addEventListener('click', closeHelp);
     if (this.dom.dismissHelpBtn) this.dom.dismissHelpBtn.addEventListener('click', closeHelp);
+    this.dom.helpModal?.querySelector('.modal-backdrop')?.addEventListener('click', closeHelp);
   }
 
   /**
@@ -364,7 +416,12 @@ export class AppShell {
     // 2. Advance isomorphic game engine (exact 1/60 ticks when ?fixed=1)
     let state;
     let events;
-    if (this.fixedStep) {
+    if (this.dom.helpModal && !this.dom.helpModal.classList.contains('hidden')) {
+      this.input?.reset();
+      this.accumulator = 0;
+      state = this.engine.getState();
+      events = [];
+    } else if (this.fixedStep) {
       this.accumulator = Math.min(this.accumulator + clampedDt, FIXED_DT * 4);
       events = [];
       let input = inputAction;

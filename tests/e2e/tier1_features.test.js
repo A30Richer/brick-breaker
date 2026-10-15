@@ -636,12 +636,17 @@ export async function createTier1Suites() {
   if (!levelsMod || !lmMod) {
     s7.skip('Levels & LevelManager pending implementation', 'src/core/levels.js or level_manager.js not yet present');
   } else {
-    const { LEVELS } = levelsMod;
+    const { LEVEL_DEFINITIONS } = levelsMod;
+    const LEVELS = LEVEL_DEFINITIONS;
     const { LevelManager } = lmMod;
 
-    s7.it('T1.7.1: LevelManager instantiates and provides access to 5 pre-crafted levels', () => {
+    s7.it('T1.7.1: LevelManager exposes every pre-crafted campaign level', () => {
       const lm = new LevelManager(LEVELS);
-      assert.ok(lm.getLevelCount() >= 5, `Level count ${lm.getLevelCount()} >= 5`);
+      assert.ok(LEVELS.length >= 5, 'Campaign includes the original five levels');
+      assert.equal(lm.getLevelCount(), LEVELS.length);
+      for (let levelIndex = 0; levelIndex < LEVELS.length; levelIndex++) {
+        assert.equal(lm.getLevel(levelIndex), LEVELS[levelIndex]);
+      }
     });
 
     s7.it('T1.7.2: Level 1 has high density layout with central corridor', () => {

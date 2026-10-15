@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Brick Breaker - Chute & Corridor Arcade</title>
-  <meta name="description" content="Lightweight high-performance Brick Breaker arcade game with narrow vertical corridors, dense brick grids, and autonomous bot AI.">
+  <meta name="description" content="Brick Breaker with ten dense corridor maps, endless procedurally generated maps, x2 / +3 multiball, shields, chain-reaction bombs, and autonomous bot AI.">
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -31,14 +31,12 @@
         </button>
         <div class="select-wrapper">
           <label for="level-select" class="sr-only">Select Level</label>
-          <select id="level-select" class="level-dropdown" title="Select Level">
-            <option value="0">L1: Central Chute</option>
-            <option value="1">L2: Dual Corridors</option>
-            <option value="2">L3: City Matrix</option>
-            <option value="3">L4: Alpine Serpentine</option>
-            <option value="4">L5: The Gauntlet</option>
-          </select>
+          <select id="level-select" class="level-dropdown" title="Select Level"></select>
         </div>
+        <button id="new-map-btn" class="btn btn-secondary" title="New Random Map (Hotkey: N)">
+          <span class="btn-icon">🎲</span>
+          <span class="btn-text">NEW MAP</span>
+        </button>
         <button id="mute-btn" class="btn btn-icon-only" title="Toggle Sound (Hotkey: M)">
           <span id="mute-icon">🔊</span>
         </button>
@@ -62,6 +60,7 @@
         <span class="hotkey-pill"><kbd>B</kbd> AI Bot</span>
         <span class="hotkey-pill"><kbd>P</kbd> Pause</span>
         <span class="hotkey-pill"><kbd>R</kbd> Restart</span>
+        <span class="hotkey-pill"><kbd>N</kbd> New Map</span>
         <span class="hotkey-pill"><kbd>M</kbd> Mute</span>
       </div>
     </footer>
@@ -78,6 +77,7 @@
           <section class="guide-section">
             <h3>OBJECTIVE</h3>
             <p>Clear all breakable bricks to advance to the next level. Penetrate dense corridors to trigger rapid satisfying chute ricochets!</p>
+            <p>Levels 6–10 are built for bot challenges: titanium armor, staggered vaults, tight gates, and multiball ricochets.</p>
           </section>
 
           <section class="guide-section">
@@ -89,12 +89,22 @@
               <div class="legend-item"><span class="brick-swatch swatch-slate"></span> <b>Slate:</b> Chute Wall (Indestructible)</div>
               <div class="legend-item"><span class="brick-swatch swatch-cyan"></span> <b>Cyan:</b> Speed Booster (+15%)</div>
               <div class="legend-item"><span class="brick-swatch swatch-purple"></span> <b>Purple:</b> Bomb (3x3 Blast Radius)</div>
+              <div class="legend-item"><span class="brick-swatch swatch-lime"></span> <b>Lime ×2:</b> Double active balls</div>
+              <div class="legend-item"><span class="brick-swatch swatch-pink"></span> <b>Pink +3:</b> Add 3 balls</div>
+              <div class="legend-item"><span class="brick-swatch swatch-shield"></span> <b>Blue Shield:</b> Energy floor for 9s</div>
             </div>
+            <p>Break a ×2 or +3 brick to activate it instantly, including with a bomb. Up to 32 balls can be active at once. A life is lost only when every ball is gone.</p>
+            <p>Bombs caught in a blast detonate a beat later, so touching bombs roll across the field as a chain reaction. When only a few bricks remain, balls turn pink and hunt them down.</p>
+          </section>
+
+          <section class="guide-section">
+            <h3>RANDOM MAPS [N]</h3>
+            <p>Pick <b>🎲 Random</b> in the level menu or press <b>[N]</b> for an endless run of generated maps: new patterns, walls, and colors every time, never repeating on this device. Each map shows its seed; the address bar keeps <code>?seed=</code> so the same run can be replayed. Add <code>&amp;bot=1</code> to start with the AI bot.</p>
           </section>
 
           <section class="guide-section">
             <h3>AUTONOMOUS BOT [B]</h3>
-            <p>Toggle the autonomous bot player at any time with the <b>[B]</b> key or <b>AI BOT</b> button. The bot uses analytical trajectory raycasting and obstacle lookahead to maintain continuous rallies with &ge;95% deflection accuracy.</p>
+            <p>Toggle the autonomous bot player at any time with the <b>[B]</b> key or <b>AI BOT</b> button. The bot predicts trajectories and prioritizes the descending ball closest to the paddle. Multiball challenges can send balls to opposite sides at once, so the bot may drop some.</p>
           </section>
         </div>
         <div class="modal-footer">

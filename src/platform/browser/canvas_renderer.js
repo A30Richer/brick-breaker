@@ -7,6 +7,7 @@
  */
 
 import { DEFAULT_CONFIG, BRICK_TYPES, GAME_STATUS } from '../../config.js';
+import { themedBrickRgb, rgbToHex } from '../../core/map_theme.js';
 
 /**
  * Helper to safely draw a rounded rectangle across all environments (including mock Canvas in tests).
@@ -53,6 +54,52 @@ export class CanvasRenderer {
 
     // Animation timer for pulsing glows
     this.animTime = 0;
+    this.powerupNotice = null;
+    this.renderedState = null;
+
+    // Juice: popping bricks, blast rings, screen shake, map intro card
+    this.pops = [];
+    this.rings = [];
+    this.shake = 0;
+    this.intro = null;
+    this.currentTheme = null;
+    this.themeCache = new Map();
+    this.themeCacheOwner = null;
+  }
+
+  /** Cached CSS color for a themed brick at a given armor level. */
+  themeColor(theme, tint, hp) {
+    if (this.themeCacheOwner !== theme) {
+      this.themeCache = new Map();
+      this.themeCacheOwner = theme;
+    }
+    const level = Math.max(1, Math.min(3, Math.round(hp) || 1));
+    const key = (tint || 0) * 4 + level;
+    let color = this.themeCache.get(key);
+    if (!color) {
+      color = rgbToHex(themedBrickRgb(theme, tint, level));
+      this.themeCache.set(key, color);
+    }
+    return color;
+  }
+
+  /** Color a brick shows right now (used for its pop-out ghost). */
+  displayColor(brick) {
+    if (brick.tint !== undefined && this.currentTheme && brick.type <= 3) {
+      return this.themeColor(this.currentTheme, brick.tint, 1);
+    }
+    return BRICK_TYPES[brick.type]?.color || brick.color || '#F59E0B';
+  }
+
+  setNotice(text, color, seconds = 1.8) {
+    this.powerupNotice = { text, color, remaining: seconds };
+  }
+
+  addBlast(brick) {
+    if (!brick) return;
+    this.rings.push({ x: brick.x + brick.width / 2, y: brick.y + brick.height / 2, life: 0, maxLife: 0.32 });
+    if (this.rings.length > 48) this.rings.shift();
+    this.shake = Math.min(7, this.shake + 2.2);
   }
 
   /**
@@ -119,9 +166,17 @@ export class CanvasRenderer {
    */
   processEvents(events) {
     if (!Array.isArray(events)) return;
+    let shieldSparks = 0;
     for (const ev of events) {
       if (!ev) continue;
       if (ev.type === 'BRICK_HIT') {
+        if (ev.destroyed && ev.brick) {
+          const b = ev.brick;
+          if (this.pops.length < 400) {
+            this.pops.push({ x: b.x, y: b.y, w: b.width, h: b.height, color: this.displayColor(b), life: 0, maxLife: 0.2 });
+          }
+          if (b.type === 6 && ev.source !== 'BOMB_BLAST') this.addBlast(b);
+        }
         if (ev.destroyed || ev.brick?.type === 4) {
           this.emitBrickParticles(ev.brick);
         } else {
@@ -135,6 +190,27 @@ export class CanvasRenderer {
         if (ball) {
           this.emitExplosion(ball.x, ball.y, '#38BDF8', 6, 0.7);
         }
+      } else if (ev.type === 'BOMB_CHAIN') {
+        this.addBlast(ev.brick);
+        if ((ev.depth || 0) >= 3) this.setNotice(`CHAIN ×${ev.depth}`, '#C084FC', 1.0);
+      } else if (ev.type === 'SHIELD_UP') {
+        this.setNotice(`SHIELD  ·  ${Math.ceil(ev.seconds)}s`, '#7DD3FC');
+        if (ev.brick) this.emitExplosion(ev.brick.x + ev.brick.width / 2, ev.brick.y + ev.brick.height / 2, '#BAE6FD', 18, 1.4);
+      } else if (ev.type === 'SHIELD_HIT') {
+        if (ev.ball && shieldSparks++ < 3) this.emitExplosion(ev.ball.x, ev.ball.y + ev.ball.radius, '#7DD3FC', 5, 0.6);
+      } else if (ev.type === 'SEEKER_ON') {
+        this.setNotice('SEEKER  ·  HUNTING LAST BRICKS', '#F472B6', 2.2);
+      } else if (ev.type === 'MULTIBALL') {
+        const color = ev.powerup === 'BALL_DOUBLER' ? '#84CC16' : '#EC4899';
+        const label = ev.powerup === 'BALL_DOUBLER' ? 'BALLS ×2' : 'BALLS +3';
+        this.powerupNotice = {
+          text: ev.spawnedCount > 0 ? `${label}  ·  ${ev.activeCount} IN PLAY` : `${label}  ·  BALL LIMIT`,
+          color,
+          remaining: 1.8
+        };
+        if (ev.brick) {
+          this.emitExplosion(ev.brick.x + ev.brick.width / 2, ev.brick.y + ev.brick.height / 2, color, 20, 1.5);
+        }
       }
     }
   }
@@ -145,6 +221,18 @@ export class CanvasRenderer {
    */
   updateParticles(dt = 1 / 60) {
     this.animTime += dt;
+    if (this.powerupNotice) {
+      this.powerupNotice.remaining -= dt;
+      if (this.powerupNotice.remaining <= 0) this.powerupNotice = null;
+    }
+    if (this.intro) {
+      this.intro.remaining -= dt;
+      if (this.intro.remaining <= 0) this.intro = null;
+    }
+    this.shake = Math.max(0, this.shake - 28 * dt);
+    const age = item => { item.life += dt; return item.life < item.maxLife; };
+    this.pops = this.pops.filter(age);
+    this.rings = this.rings.filter(age);
     const active = [];
     for (let i = 0; i < this.particles.length; i++) {
       const p = this.particles[i];
@@ -169,6 +257,19 @@ export class CanvasRenderer {
     if (!this.ctx || !state) return;
     const ctx = this.ctx;
 
+    if (this.renderedState !== state) {
+      this.ballTrails.clear();
+      this.particles = [];
+      this.pops = [];
+      this.rings = [];
+      this.shake = 0;
+      this.powerupNotice = null;
+      // A new GameState means a new or restarted map: show its title card.
+      this.intro = { remaining: 2.8, total: 2.8 };
+      this.renderedState = state;
+    }
+    this.currentTheme = state.theme || null;
+
     // Process event-driven visual effects
     if (events && events.length > 0) {
       this.processEvents(events);
@@ -179,34 +280,135 @@ export class CanvasRenderer {
     const height = state.arena?.height || this.height;
 
     // 1. Arena Dark Background & High-Tech Scanline Effect
-    this.drawBackground(ctx, width, height);
+    this.drawBackground(ctx, width, height, state.theme);
 
-    // 2. Bricks Matrix
+    // World layers shake together after bomb blasts; the HUD stays still.
+    ctx.save();
+    if (this.shake > 0.05 && typeof ctx.translate === 'function') {
+      ctx.translate((Math.random() - 0.5) * this.shake, (Math.random() - 0.5) * this.shake);
+    }
+
+    // 2. Bricks Matrix, popping ghosts, and blast rings
     this.drawBricks(ctx, state);
+    this.drawPops(ctx);
 
     // 3. Particles
     this.drawParticles(ctx);
 
-    // 4. Ball Trails and Balls
+    // 4. Shield floor, Ball Trails and Balls
+    this.drawShield(ctx, state, width, height);
     this.drawBalls(ctx, state);
 
     // 5. Paddle (with AI autonomous glow indicator)
     this.drawPaddle(ctx, state);
+    ctx.restore();
 
     // 6. Top HUD
     this.drawHUD(ctx, state);
+    this.drawPowerupNotice(ctx, state);
 
     // 7. State Machine Overlays (READY, PAUSED, LEVEL_CLEAR, GAME_OVER, VICTORY)
     this.drawStateOverlay(ctx, state, width, height);
+    this.drawIntro(ctx, state, width);
+  }
+
+  /** Bricks swell and fade for a moment after they break. */
+  drawPops(ctx) {
+    if (this.pops.length === 0 && this.rings.length === 0) return;
+    ctx.save();
+    for (const pop of this.pops) {
+      const t = pop.life / pop.maxLife;
+      const grow = 1 + 0.45 * t;
+      const w = pop.w * grow;
+      const h = pop.h * grow;
+      ctx.globalAlpha = (1 - t) * 0.85;
+      ctx.fillStyle = pop.color;
+      ctx.fillRect(pop.x + (pop.w - w) / 2, pop.y + (pop.h - h) / 2, w, h);
+    }
+    ctx.lineWidth = 2;
+    for (const ring of this.rings) {
+      const t = ring.life / ring.maxLife;
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = t < 0.4 ? '#F5D0FE' : '#C084FC';
+      ctx.beginPath();
+      ctx.arc(ring.x, ring.y, 6 + 30 * t, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /** Glowing energy floor while a SHIELD brick's timer runs. */
+  drawShield(ctx, state, width, height) {
+    if (!(state.shield > 0)) return;
+    const inset = this.config.rules?.shieldInset ?? DEFAULT_CONFIG.rules.shieldInset;
+    const y = height - inset;
+    const fading = state.shield < 2;
+    const alpha = fading ? (Math.sin(this.animTime * 30) > 0 ? 0.9 : 0.35) : 0.9;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = '#38BDF8';
+    ctx.strokeStyle = '#7DD3FC';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = alpha * 0.25;
+    ctx.fillStyle = '#7DD3FC';
+    ctx.fillRect(0, y, width, inset);
+    ctx.restore();
+  }
+
+  /** Title card naming the map (and its seed) for the first seconds. */
+  drawIntro(ctx, state, width) {
+    if (!this.intro) return;
+    const elapsed = this.intro.total - this.intro.remaining;
+    const alpha = Math.min(1, elapsed / 0.25, this.intro.remaining / 0.5);
+    const map = state.map;
+    const levelNum = (state.levelIndex || 0) + 1;
+    const kicker = map
+      ? `RANDOM MAP ${map.runIndex ?? levelNum}  ·  ${map.difficulty}`
+      : `LEVEL ${levelNum}${state.levelDifficulty ? '  ·  ' + state.levelDifficulty : ''}`;
+    const accent = state.theme?.colors?.[2] || '#38BDF8';
+
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.fillStyle = 'rgba(8, 10, 20, 0.86)';
+    drawRoundRect(ctx, 36, 196, width - 72, map ? 104 : 88, 10);
+    ctx.fill();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.5;
+    drawRoundRect(ctx, 36, 196, width - 72, map ? 104 : 88, 10);
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 11px "Courier New", monospace, sans-serif';
+    ctx.fillStyle = accent;
+    ctx.fillText(kicker, width / 2, 216);
+    ctx.font = 'bold 22px "Courier New", monospace, sans-serif';
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillText(state.levelName || 'Brick Breaker', width / 2, 242, width - 90);
+    ctx.font = '12px "Courier New", monospace, sans-serif';
+    ctx.fillStyle = '#CBD5E1';
+    ctx.fillText(map?.subtitle || state.levelSubtitle || '', width / 2, 266, width - 90);
+    if (map) {
+      ctx.font = '11px "Courier New", monospace, sans-serif';
+      ctx.fillStyle = '#64748B';
+      ctx.fillText(`SEED ${map.seed}`, width / 2, 287, width - 90);
+    }
+    ctx.restore();
   }
 
   /**
    * Draws dark arcade background with subtle grid and border.
    */
-  drawBackground(ctx, width, height) {
+  drawBackground(ctx, width, height, mapTheme = null) {
     ctx.save();
-    // High-contrast dark arcade background (#0c0f1d)
-    ctx.fillStyle = this.config.theme?.background || '#0c0f1d';
+    // High-contrast dark arcade background (#0c0f1d), tinted by generated map themes
+    ctx.fillStyle = mapTheme?.background || this.config.theme?.background || '#0c0f1d';
     ctx.fillRect(0, 0, width, height);
 
     // Subtle arena boundary border
@@ -233,6 +435,7 @@ export class CanvasRenderer {
   drawBricks(ctx, state) {
     const bricks = state.bricks;
     if (!Array.isArray(bricks)) return;
+    const theme = state.theme;
 
     ctx.save();
 
@@ -247,15 +450,15 @@ export class CanvasRenderer {
 
       if (b.type === 4 || b.indestructible) {
         // Corridor Wall: Dark slate (#334155) with crisp silver border (#94A3B8)
-        ctx.fillStyle = '#334155';
+        ctx.fillStyle = theme?.wall || '#334155';
         ctx.fillRect(x, y, w, h);
 
-        ctx.strokeStyle = '#94A3B8';
+        ctx.strokeStyle = theme?.wallEdge || '#94A3B8';
         ctx.lineWidth = 1;
         ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
         // Subtle metallic center groove
-        ctx.fillStyle = '#475569';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
         ctx.fillRect(x + w * 0.25, y + 1, w * 0.5, h - 2);
       } else if (b.type === 5) {
         // Booster Brick: Electric cyan (#06B6D4) with bright core
@@ -281,6 +484,44 @@ export class CanvasRenderer {
         ctx.fillRect(x + (w - pw) / 2, y + (h - ph) / 2, pw, ph);
 
         ctx.strokeStyle = '#7E22CE';
+        ctx.lineWidth = 0.75;
+        ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      } else if (b.type === 7 || b.type === 8) {
+        // Keep the powerup readable even in the 15×11 dense brick grid.
+        ctx.fillStyle = BRICK_TYPES[b.type].color;
+        ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = '#0C0F1D';
+        ctx.font = 'bold 8px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(b.type === 7 ? '×2' : '+3', x + w / 2, y + h / 2, w - 1);
+      } else if (b.type === 9) {
+        // Shield powerup: pale blue with a glowing floor bar glyph
+        const pulse = 0.6 + 0.4 * Math.sin(this.animTime * 6);
+        ctx.fillStyle = '#93C5FD';
+        ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.55 + 0.4 * pulse})`;
+        ctx.fillRect(x + 2, y + h - 4, w - 4, 2);
+        ctx.fillRect(x + w / 2 - 1, y + 2, 2, h - 6);
+        ctx.strokeStyle = '#2563EB';
+        ctx.lineWidth = 0.75;
+        ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      } else if (theme && b.tint !== undefined && b.type <= 3) {
+        // Generated maps: palette color per cell, darker for more armor
+        ctx.fillStyle = this.themeColor(theme, b.tint, b.hp);
+        ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.22)';
+        ctx.fillRect(x, y, w, Math.max(1, h * 0.28));
+        if (b.hp >= 2) {
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x + 1.5, y + 1.5, w - 3, h - 3);
+        }
+        if (b.hp >= 3) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+          ctx.fillRect(x + w / 2 - 1, y + h / 2 - 1, 2, 2);
+        }
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
         ctx.lineWidth = 0.75;
         ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
       } else if (b.type === 3) {
@@ -366,13 +607,22 @@ export class CanvasRenderer {
     const balls = state.balls;
     if (!Array.isArray(balls)) return;
 
+    const activeIds = new Set(balls.filter(ball => ball.active).map(ball => ball.id));
+    for (const ballId of this.ballTrails.keys()) {
+      if (!activeIds.has(ballId)) this.ballTrails.delete(ballId);
+    }
+
     ctx.save();
+    const seeking = Boolean(state.seeker?.active);
+    const trailColor = seeking ? '#F472B6' : '#F97316';
+    const haloColor = seeking ? 'rgba(244, 114, 182, 0.45)' : 'rgba(249, 115, 22, 0.4)';
+    const bodyColor = seeking ? '#F9A8D4' : '#FB923C';
 
     for (let i = 0; i < balls.length; i++) {
       const ball = balls[i];
       if (!ball.active) continue;
 
-      const ballId = ball.id || i;
+      const ballId = ball.id ?? i;
       let trail = this.ballTrails.get(ballId);
       if (!trail) {
         trail = [];
@@ -395,7 +645,7 @@ export class CanvasRenderer {
         const progress = (t + 1) / trail.length;
         const trailRadius = Math.max(1, ball.radius * progress * 0.75);
         ctx.globalAlpha = progress * 0.35;
-        ctx.fillStyle = '#F97316';
+        ctx.fillStyle = trailColor;
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, trailRadius, 0, Math.PI * 2);
         ctx.fill();
@@ -405,13 +655,13 @@ export class CanvasRenderer {
       ctx.globalAlpha = 1.0;
 
       // Glow halo
-      ctx.fillStyle = 'rgba(249, 115, 22, 0.4)';
+      ctx.fillStyle = haloColor;
       ctx.beginPath();
       ctx.arc(ball.x, ball.y, ball.radius * 1.6, 0, Math.PI * 2);
       ctx.fill();
 
-      // Main ball body: bright orange
-      ctx.fillStyle = '#FB923C';
+      // Main ball body: bright orange (pink while seeking)
+      ctx.fillStyle = bodyColor;
       ctx.beginPath();
       ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
       ctx.fill();
@@ -494,6 +744,14 @@ export class CanvasRenderer {
     ctx.lineTo(this.width, 36);
     ctx.stroke();
 
+    // Clear progress bar along the HUD edge
+    const total = state.stats?.totalBreakableBricks || 0;
+    if (total > 0) {
+      const fraction = Math.min(1, (state.stats.bricksDestroyed || 0) / total);
+      ctx.fillStyle = state.theme?.colors?.[1] || '#38BDF8';
+      ctx.fillRect(0, 35, this.width * fraction, 3);
+    }
+
     ctx.font = 'bold 12px "Courier New", monospace, sans-serif';
     ctx.textBaseline = 'middle';
 
@@ -507,12 +765,12 @@ export class CanvasRenderer {
     // 2. Level (Center)
     const levelNum = (state.levelIndex || 0) + 1;
     ctx.fillStyle = '#38BDF8';
-    ctx.fillText(`LVL ${levelNum}`, 140, 18);
+    ctx.fillText(state.map ? `MAP ${state.map.runIndex ?? levelNum}` : `LVL ${levelNum}`, 140, 18);
 
     // 3. Lives (Heart / Orb icons)
     const lives = Math.max(0, state.lives ?? 3);
     ctx.fillStyle = '#EF4444';
-    let lifeX = 210;
+    let lifeX = 192;
     for (let l = 0; l < Math.min(5, lives); l++) {
       ctx.beginPath();
       ctx.arc(lifeX, 18, 4, 0, Math.PI * 2);
@@ -527,13 +785,30 @@ export class CanvasRenderer {
     const textWidth = ctx.measureText ? ctx.measureText(botText).width : 70;
     ctx.fillText(botText, this.width - textWidth - 10, 18);
 
+    const activeBalls = state.balls?.filter(ball => ball.active).length ?? 0;
+    ctx.fillStyle = '#EC4899';
+    ctx.fillText(`BALLS ${activeBalls}`, 266, 18);
+
     // 5. Combo Indicator (if combo > 1)
     if (state.stats?.currentCombo > 1) {
       ctx.fillStyle = '#F59E0B';
       ctx.font = 'bold 10px monospace';
-      ctx.fillText(`x${state.stats.currentCombo}`, 105, 18);
+      ctx.fillText(`COMBO x${state.stats.currentCombo}`, 10, state.paddle.y - 35);
     }
 
+    ctx.restore();
+  }
+
+  drawPowerupNotice(ctx, state) {
+    if (!this.powerupNotice || state.status !== GAME_STATUS.PLAYING) return;
+    ctx.save();
+    ctx.font = 'bold 14px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(12, 15, 29, 0.9)';
+    ctx.fillRect(70, state.paddle.y - 80, this.width - 140, 30);
+    ctx.fillStyle = this.powerupNotice.color;
+    ctx.fillText(this.powerupNotice.text, this.width / 2, state.paddle.y - 65);
     ctx.restore();
   }
 
@@ -546,8 +821,8 @@ export class CanvasRenderer {
 
     ctx.save();
 
-    // Dark translucent backdrop
-    ctx.fillStyle = 'rgba(12, 15, 29, 0.75)';
+    // Dark translucent backdrop (lighter on READY so the new map stays visible)
+    ctx.fillStyle = status === GAME_STATUS.READY ? 'rgba(12, 15, 29, 0.5)' : 'rgba(12, 15, 29, 0.75)';
     ctx.fillRect(0, 36, width, height - 36);
 
     ctx.textAlign = 'center';
@@ -560,7 +835,7 @@ export class CanvasRenderer {
       // Ready Overlay
       ctx.font = 'bold 26px "Courier New", monospace, sans-serif';
       ctx.fillStyle = '#38BDF8';
-      ctx.fillText('BRICK BREAKER', cx, cy - 40);
+      ctx.fillText(state.map ? 'RANDOM MAP' : 'BRICK BREAKER', cx, cy - 40);
 
       ctx.font = 'bold 14px "Courier New", monospace, sans-serif';
       ctx.fillStyle = '#F8FAFC';
@@ -590,7 +865,7 @@ export class CanvasRenderer {
 
       ctx.font = 'bold 14px "Courier New", monospace, sans-serif';
       ctx.fillStyle = '#F8FAFC';
-      ctx.fillText('Loading Next Corridor...', cx, cy + 15);
+      ctx.fillText(state.map ? 'Generating Next Map...' : 'Loading Next Corridor...', cx, cy + 15);
     } else if (status === GAME_STATUS.GAME_OVER) {
       // Game Over Overlay
       ctx.font = 'bold 30px "Courier New", monospace, sans-serif';

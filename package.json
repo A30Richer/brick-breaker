@@ -2,8 +2,14 @@
   "name": "brick_breaker",
   "version": "1.0.0",
   "type": "module",
-  "description": "A lightweight, high-performance Brick Breaker web game with dense levels, corridors, and autonomous bot.",
+  "description": "A lightweight Brick Breaker game with ten corridor levels, endless seeded random maps, x2 / +3 multiball, shields, chain-reaction bombs, and an autonomous bot.",
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "test:levels": "node tests/level_validator.js",
+    "test:e2e": "node tests/e2e/test_runner.js",
+    "test:bot": "node tests/bot_rally_benchmark.js",
+    "test:campaign": "node tests/bot_campaign_benchmark.js",
+    "test:generated": "node tests/generated_maps_benchmark.js",
+    "mapgen": "node tools/mapgen.js"
   }
 }

@@ -3,7 +3,7 @@
  * Covers comprehensive end-to-end user and simulation journeys:
  * - Scenario 1: Complete Level Clear Simulation (Serve, Chute Traversal, Brick Destruction, Level Clear)
  * - Scenario 2: 3,000-Frame Continuous Autonomous Bot Rally (Zero Drops, Level 1 & Level 2)
- * - Scenario 3: Multi-Level Campaign Progression (Level 1 through 5 to Victory)
+ * - Scenario 3: Complete Campaign Progression through Victory
  * - Scenario 4: Game Over & Full Restart Cycle (Lives 3 -> 0, Game Over, Restart)
  * - Scenario 5: Pause State Preservation & Deterministic Resumption
  */
@@ -150,23 +150,23 @@ export async function createTier4Suites() {
   });
 
   // =========================================================================
-  // Scenario 3: Multi-Level Campaign Progression (Level 1 to 5 to Victory)
+  // Scenario 3: Complete Campaign Progression through Victory
   // =========================================================================
-  s.it('Scenario 3: Multi-Level Campaign Progression (Level 1 through 5 to Victory)', () => {
+  s.it('Scenario 3: Multi-Level Campaign Progression (all levels through Victory)', () => {
     if (!levelsMod || !lmMod) {
       s.skip('Scenario 3: Campaign Progression', 'levels.js or level_manager.js not available');
       return;
     }
-    const { LEVELS } = levelsMod;
+    const { LEVEL_DEFINITIONS } = levelsMod;
     const { LevelManager } = lmMod;
 
-    const lm = new LevelManager(LEVELS);
+    const lm = new LevelManager(LEVEL_DEFINITIONS);
     assert.equal(lm.getCurrentLevelIndex(), 0, 'Starts at Level 0 (Level 1)');
 
     let cumulativeScore = 0;
 
-    // Simulate clearing each of the 5 levels
-    for (let lvl = 0; lvl < 5; lvl++) {
+    // Simulate clearing every level in the catalog.
+    for (let lvl = 0; lvl < LEVEL_DEFINITIONS.length; lvl++) {
       const levelDef = lm.getLevel(lvl);
       assert.ok(levelDef, `Loaded Level ${lvl + 1}: ${levelDef.name}`);
 
@@ -187,10 +187,10 @@ export async function createTier4Suites() {
 
       // Advance progression
       const nextIdx = lm.advanceLevel();
-      if (lvl < 4) {
+      if (lvl < LEVEL_DEFINITIONS.length - 1) {
         assert.equal(nextIdx, lvl + 1, `Advanced to Level index ${lvl + 1}`);
       } else {
-        assert.equal(nextIdx, -1, 'Campaign finished after Level 5 (Victory)');
+        assert.equal(nextIdx, -1, 'Campaign finished after the final level (Victory)');
       }
     }
 

@@ -11,6 +11,12 @@ import { GameEngine } from '../../core/engine.js';
 import { CanvasRenderer } from './canvas_renderer.js';
 import { InputManager } from './input_manager.js';
 import { AudioSynth } from './audio_synth.js';
+import { makeSeedCode } from '../../core/rng.js';
+import { DIFFICULTY_NAMES, DIFFICULTY_PROFILES } from '../../core/map_generator.js';
+
+const SEEN_MAPS_KEY = 'brickBreaker.seenMaps';
+const SEEN_MAPS_LIMIT = 400;
+const FIXED_DT = 1 / 60;
 
 export class AppShell {
   constructor() {
@@ -22,6 +28,11 @@ export class AppShell {
     this.lastTimestamp = 0;
     this.isRunning = false;
     this.animationFrameId = null;
+    // ?fixed=1 steps the simulation in exact 1/60 s ticks so a seeded run
+    // replays identically to the headless autoplay (for recording).
+    this.fixedStep = false;
+    this.accumulator = 0;
+    this.lastMapFingerprint = null;
 
     // DOM UI elements
     this.dom = {
@@ -29,6 +40,7 @@ export class AppShell {
       pauseBtn: null,
       restartBtn: null,
       levelSelect: null,
+      newMapBtn: null,
       muteBtn: null,
       muteIcon: null,
       helpBtn: null,
@@ -65,9 +77,11 @@ export class AppShell {
 
     // Cache DOM elements
     this.cacheDomElements();
+    this.populateLevelSelect();
 
     // Wire user interaction listeners
     this.attachDomEvents();
+    this.applyUrlOptions();
 
     // Sync initial UI
     this.syncUI();
@@ -81,12 +95,97 @@ export class AppShell {
     this.dom.pauseBtn = document.getElementById('pause-btn');
     this.dom.restartBtn = document.getElementById('restart-btn');
     this.dom.levelSelect = document.getElementById('level-select');
+    this.dom.newMapBtn = document.getElementById('new-map-btn');
     this.dom.muteBtn = document.getElementById('mute-btn');
     this.dom.muteIcon = document.getElementById('mute-icon');
     this.dom.helpBtn = document.getElementById('help-btn');
     this.dom.closeHelpBtn = document.getElementById('close-help-btn');
     this.dom.dismissHelpBtn = document.getElementById('dismiss-help-btn');
     this.dom.helpModal = document.getElementById('help-modal');
+  }
+
+  populateLevelSelect() {
+    if (!this.dom.levelSelect) return;
+    const options = [];
+    for (let index = 0; index < this.engine.levelManager.getLevelCount(); index++) {
+      const level = this.engine.levelManager.getLevel(index);
+      const option = document.createElement('option');
+      option.value = String(index);
+      option.textContent = `L${index + 1}: ${level.name}`;
+      option.title = level.subtitle || level.description || level.name;
+      options.push(option);
+    }
+    const randomGroup = document.createElement('optgroup');
+    randomGroup.label = 'Random maps (endless)';
+    for (const key of DIFFICULTY_NAMES) {
+      const option = document.createElement('option');
+      option.value = `random:${key}`;
+      option.textContent = `🎲 Random · ${DIFFICULTY_PROFILES[key].label}`;
+      randomGroup.append(option);
+    }
+    this.dom.levelSelect.replaceChildren(...options, randomGroup);
+  }
+
+  /** Reads ?seed=&difficulty=&bot=1&fixed=1&level= so runs can be shared and recorded. */
+  applyUrlOptions() {
+    const params = new URLSearchParams(window.location.search);
+    this.fixedStep = params.get('fixed') === '1';
+    const level = parseInt(params.get('level'), 10);
+    if (params.has('seed') || params.has('random') || params.has('difficulty')) {
+      this.startRandom(params.get('difficulty') || 'normal', params.get('seed') || undefined);
+    } else if (Number.isInteger(level) && level >= 1 && level <= this.engine.levelManager.getLevelCount()) {
+      this.engine.loadLevel(level - 1);
+    }
+    if (params.get('bot') === '1') this.engine.setBotActive(true);
+  }
+
+  loadSeenMaps() {
+    try {
+      const stored = JSON.parse(window.localStorage?.getItem(SEEN_MAPS_KEY) || '[]');
+      return Array.isArray(stored) ? stored : [];
+    } catch {
+      return [];
+    }
+  }
+
+  rememberMap(fingerprint) {
+    try {
+      const seen = this.loadSeenMaps().filter(item => item !== fingerprint);
+      seen.push(fingerprint);
+      window.localStorage?.setItem(SEEN_MAPS_KEY, JSON.stringify(seen.slice(-SEEN_MAPS_LIMIT)));
+    } catch {
+      // Storage may be unavailable (private mode); maps still never repeat within a run.
+    }
+  }
+
+  /**
+   * Starts an endless generated run. Without an explicit seed, maps already
+   * played on this device are skipped; a shared ?seed= replays exactly.
+   */
+  startRandom(difficulty = 'normal', seed) {
+    const avoid = seed === undefined ? this.loadSeenMaps() : [];
+    this.engine.startRandomRun({ seed: seed ?? makeSeedCode(), difficulty, avoid });
+  }
+
+  /** Skips to a fresh generated map (starting a run when on the campaign). */
+  newRandomMap() {
+    if (this.engine.isRandomRun()) this.engine.nextRandomMap();
+    else this.startRandom('normal');
+  }
+
+  /** Remembers each generated map and keeps ?seed= in the address bar for replay. */
+  trackGeneratedMap(state) {
+    const map = state?.map;
+    if (!map || map.fingerprint === this.lastMapFingerprint) return;
+    this.lastMapFingerprint = map.fingerprint;
+    this.rememberMap(map.fingerprint);
+    if (map.runSeed && window.history?.replaceState) {
+      const params = new URLSearchParams(window.location.search);
+      params.set('seed', map.runSeed);
+      params.set('difficulty', map.difficultyKey || 'normal');
+      params.delete('level');
+      window.history.replaceState(null, '', `${window.location.pathname}?${params}`);
+    }
   }
 
   attachDomEvents() {
@@ -128,11 +227,26 @@ export class AppShell {
     if (this.dom.levelSelect) {
       this.dom.levelSelect.addEventListener('change', (e) => {
         unlockAudio();
-        const levelIdx = parseInt(e.target.value, 10);
+        const value = String(e.target.value);
+        if (value.startsWith('random:')) {
+          this.startRandom(value.slice('random:'.length));
+          this.syncUI();
+          return;
+        }
+        const levelIdx = parseInt(value, 10);
         if (!isNaN(levelIdx)) {
           this.engine.loadLevel(levelIdx);
           this.syncUI();
         }
+      });
+    }
+
+    // New random map button
+    if (this.dom.newMapBtn) {
+      this.dom.newMapBtn.addEventListener('click', () => {
+        unlockAudio();
+        this.newRandomMap();
+        this.syncUI();
       });
     }
 
@@ -147,8 +261,12 @@ export class AppShell {
       });
     }
 
-    // Hotkey for mute (M)
+    // Hotkeys for mute (M) and a new random map (N)
     window.addEventListener('keydown', (e) => {
+      if (e.key === 'n' || e.key === 'N') {
+        this.newRandomMap();
+        this.syncUI();
+      }
       if (e.key === 'm' || e.key === 'M') {
         const isMuted = this.audio.toggleMute();
         if (this.dom.muteIcon) {
@@ -198,10 +316,12 @@ export class AppShell {
 
     // Level selector dropdown sync
     if (this.dom.levelSelect && typeof state.levelIndex === 'number') {
-      if (this.dom.levelSelect.value !== String(state.levelIndex)) {
-        this.dom.levelSelect.value = String(state.levelIndex);
+      const value = state.map ? `random:${state.map.difficultyKey || 'normal'}` : String(state.levelIndex);
+      if (this.dom.levelSelect.value !== value) {
+        this.dom.levelSelect.value = value;
       }
     }
+    this.trackGeneratedMap(state);
   }
 
   /**
@@ -241,8 +361,25 @@ export class AppShell {
     // 1. Poll normalized inputs
     const inputAction = this.input ? this.input.pollAction() : {};
 
-    // 2. Advance isomorphic game engine
-    const { state, events } = this.engine.tick(clampedDt, inputAction);
+    // 2. Advance isomorphic game engine (exact 1/60 ticks when ?fixed=1)
+    let state;
+    let events;
+    if (this.fixedStep) {
+      this.accumulator = Math.min(this.accumulator + clampedDt, FIXED_DT * 4);
+      events = [];
+      let input = inputAction;
+      let result = { state: this.engine.getState(), events: [] };
+      while (this.accumulator >= FIXED_DT - 1e-9) {
+        result = this.engine.tick(FIXED_DT, input);
+        events.push(...result.events);
+        // Steering persists; one-shot commands apply to the first tick only.
+        input = { ...inputAction, launchBall: false, toggleBot: false, togglePause: false, restart: false };
+        this.accumulator -= FIXED_DT;
+      }
+      state = result.state;
+    } else {
+      ({ state, events } = this.engine.tick(clampedDt, inputAction));
+    }
 
     // 3. Trigger procedural sound effects
     if (this.audio && events && events.length > 0) {
@@ -265,6 +402,8 @@ export class AppShell {
 // Automatically bootstrap when executed in browser
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   const app = new AppShell();
+  // Automation handle (recorders, scripted demos): window.brickBreaker.engine.startRandomRun({ seed })
+  window.brickBreaker = app;
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => app.init());
   } else {

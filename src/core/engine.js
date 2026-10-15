@@ -18,6 +18,7 @@ import { stepPhysics } from './physics.js';
 import { computeBotAction } from './bot.js';
 import { LevelManager } from './level_manager.js';
 import { LEVEL_DEFINITIONS } from './levels.js';
+import { MapSequence } from './map_generator.js';
 
 export class GameEngine {
   /**
@@ -41,6 +42,8 @@ export class GameEngine {
     this.levelManager = levelManager || new LevelManager(LEVEL_DEFINITIONS);
     this.state = null;
     this.currentLevelIndex = 0;
+    this.currentLevelDef = null;
+    this.randomRun = null; // MapSequence while an endless procedural run is active
 
     // Load initial level (Level 1 / index 0)
     this.loadLevel(0);
@@ -56,10 +59,20 @@ export class GameEngine {
   loadLevel(index = 0) {
     const levelDef = this.levelManager.getLevel(index);
     this.levelManager.setCurrentLevelIndex(index);
-    this.currentLevelIndex = index;
+    this.randomRun = null;
+    return this.applyLevelDefinition(levelDef, index);
+  }
 
-    const prevScore = this.state?.score ?? 0;
-    const prevLives = this.state?.lives ?? (this.config.rules?.initialLives ?? 3);
+  /**
+   * Builds a fresh GameState for any level definition (campaign or generated),
+   * carrying score, lives, and bot mode over unless overridden.
+   */
+  applyLevelDefinition(levelDef, index, { score, lives } = {}) {
+    this.currentLevelIndex = index;
+    this.currentLevelDef = levelDef;
+
+    const prevScore = score ?? this.state?.score ?? 0;
+    const prevLives = lives ?? this.state?.lives ?? (this.config.rules?.initialLives ?? 3);
     const isBotActive = this.state?.mode?.isBotActive ?? false;
 
     this.state = createInitialState(this.config, levelDef);
@@ -68,8 +81,40 @@ export class GameEngine {
     this.state.mode.isBotActive = isBotActive;
     this.state.levelIndex = index;
     this.state.levelName = levelDef.name || `Level ${index + 1}`;
+    labelLevel(this.state, levelDef);
 
     return this.state;
+  }
+
+  /**
+   * Starts an endless run of procedurally generated maps.
+   * Clearing a map generates the next one instead of advancing the campaign.
+   *
+   * @param {Object} [options] - { seed, difficulty: 'chill'|'normal'|'hard', avoid: fingerprints[] }.
+   * @returns {Object} GameState of the first generated map.
+   */
+  startRandomRun({ seed, difficulty = 'normal', avoid = [] } = {}) {
+    this.randomRun = new MapSequence({ seed, difficulty, avoid });
+    const levelDef = this.randomRun.next();
+    return this.applyLevelDefinition(levelDef, levelDef.runIndex - 1, {
+      score: 0,
+      lives: this.config.rules?.initialLives ?? 3
+    });
+  }
+
+  /**
+   * Generates and loads the next map of the active random run (starting one if needed).
+   * @returns {Object} GameState of the new map.
+   */
+  nextRandomMap() {
+    if (!this.randomRun) return this.startRandomRun();
+    const levelDef = this.randomRun.next();
+    return this.applyLevelDefinition(levelDef, levelDef.runIndex - 1);
+  }
+
+  /** @returns {boolean} True while an endless procedural run is active. */
+  isRandomRun() {
+    return this.randomRun !== null;
   }
 
   /**
@@ -83,13 +128,14 @@ export class GameEngine {
     const currentScore = this.state?.score ?? 0;
     const currentLives = this.state?.lives > 0 ? this.state.lives : (this.config.rules?.initialLives ?? 3);
 
-    const levelDef = this.levelManager.getLevel(this.currentLevelIndex);
+    const levelDef = this.currentLevelDef ?? this.levelManager.getLevel(this.currentLevelIndex);
     this.state = createInitialState(this.config, levelDef);
     this.state.mode.isBotActive = isBotActive;
     this.state.score = currentScore;
     this.state.lives = currentLives;
     this.state.levelIndex = this.currentLevelIndex;
     this.state.levelName = levelDef.name || `Level ${this.currentLevelIndex + 1}`;
+    labelLevel(this.state, levelDef);
 
     return this.state;
   }
@@ -100,17 +146,23 @@ export class GameEngine {
    * @returns {Object} Fresh initial GameState.
    */
   restartGame() {
+    if (this.randomRun) {
+      // Replay the same run from its first map with a fresh score.
+      return this.startRandomRun({ seed: this.randomRun.seed, difficulty: this.randomRun.difficulty });
+    }
     this.levelManager.resetLevelProgression();
     this.currentLevelIndex = 0;
     const isBotActive = this.state?.mode?.isBotActive ?? false;
 
     const levelDef = this.levelManager.getLevel(0);
+    this.currentLevelDef = levelDef;
     this.state = createInitialState(this.config, levelDef);
     this.state.mode.isBotActive = isBotActive;
     this.state.score = 0;
     this.state.lives = this.config.rules?.initialLives ?? 3;
     this.state.levelIndex = 0;
     this.state.levelName = levelDef.name || 'Level 1';
+    labelLevel(this.state, levelDef);
 
     return this.state;
   }
@@ -122,6 +174,7 @@ export class GameEngine {
    * @returns {Object} Updated GameState.
    */
   nextLevel() {
+    if (this.randomRun) return this.nextRandomMap();
     if (this.levelManager.hasNextLevel()) {
       const nextIdx = this.levelManager.advanceLevel();
       return this.loadLevel(nextIdx);
@@ -261,6 +314,12 @@ export class GameEngine {
 
     // 4. If in LEVEL_CLEAR state, progress to next level (or victory)
     if (this.state.status === GAME_STATUS.LEVEL_CLEAR) {
+      if (this.randomRun) {
+        this.nextRandomMap();
+        events.push({ type: 'LEVEL_ADVANCED', levelIndex: this.currentLevelIndex });
+        events.push({ type: 'MAP_GENERATED', map: this.state.map });
+        return { state: this.state, events };
+      }
       if (this.levelManager.hasNextLevel()) {
         const nextIdx = this.levelManager.advanceLevel();
         this.loadLevel(nextIdx);
@@ -301,8 +360,8 @@ export class GameEngine {
     const physicsEvents = stepPhysics(this.state, inputAction, dt, this.config);
     events.push(...physicsEvents);
 
-    // 7. Post-physics level progression & victory evaluation
-    if (this.state.status === GAME_STATUS.LEVEL_CLEAR) {
+    // 7. Post-physics level progression & victory evaluation (random runs never end)
+    if (this.state.status === GAME_STATUS.LEVEL_CLEAR && !this.randomRun) {
       if (!this.levelManager.hasNextLevel() || this.currentLevelIndex >= this.levelManager.getLevelCount() - 1) {
         this.state.status = GAME_STATUS.VICTORY;
         events.push({ type: 'VICTORY' });
@@ -311,6 +370,28 @@ export class GameEngine {
 
     return { state: this.state, events };
   }
+}
+
+/** Copies display labels (and the generated-map summary) onto a fresh GameState. */
+function labelLevel(state, levelDef) {
+  state.levelSubtitle = levelDef.subtitle || '';
+  state.levelDifficulty = levelDef.difficulty || '';
+  state.map = levelDef.generated ? describeGeneratedMap(levelDef) : null;
+}
+
+/** Small serializable summary of a generated map, kept on GameState for HUD/recording. */
+function describeGeneratedMap(levelDef) {
+  return {
+    seed: levelDef.seed,
+    runSeed: levelDef.runSeed ?? null,
+    runIndex: levelDef.runIndex ?? null,
+    name: levelDef.name,
+    subtitle: levelDef.subtitle,
+    difficulty: levelDef.difficulty,
+    difficultyKey: levelDef.difficultyKey,
+    fingerprint: levelDef.fingerprint,
+    signature: levelDef.signature
+  };
 }
 
 export default GameEngine;

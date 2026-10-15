@@ -79,6 +79,7 @@ export function createInitialState(customConfig = {}, levelDef = null) {
         const isIndestructible = typeDef.hp === Infinity || !typeDef.breakable;
         const hp = isIndestructible ? Infinity : typeDef.hp;
 
+        const tint = levelDef.tints ? parseInt(levelDef.tints[r]?.[c], 36) : NaN;
         const brick = {
           id: brickIndex + 1,
           col: c,
@@ -95,6 +96,7 @@ export function createInitialState(customConfig = {}, levelDef = null) {
           color: typeDef.color,
           active: true
         };
+        if (!Number.isNaN(tint)) brick.tint = tint;
 
         bricks.push(brick);
         cells[r * cols + c] = brickIndex;
@@ -115,6 +117,8 @@ export function createInitialState(customConfig = {}, levelDef = null) {
     lives: config.rules.initialLives ?? 3,
     levelIndex: levelDef?.id ?? 0,
     levelName: levelDef?.name ?? 'Standard Level',
+    theme: levelDef?.theme ?? null,
+    map: null,
     arena: {
       width: arenaWidth,
       height: arenaHeight
@@ -129,7 +133,10 @@ export function createInitialState(customConfig = {}, levelDef = null) {
       vx: 0
     },
     balls,
+    nextBallId: 2,
     bricks,
+    fuses: [],
+    shield: 0, // seconds of energy floor left
     grid: {
       cols,
       rows,

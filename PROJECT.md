@@ -27,7 +27,7 @@ A decoupled, isomorphic architecture with zero external build/npm dependencies:
 | F3 | Continuous Collision Detection (CCD) & Spatial Grid | Swept circle vs Minkowski AABB and uniform 2D grid index for O(1) collision queries | M1 | Survey (all) |
 | F4 | Variable Paddle Deflection | Maps contact offset u in [-1, 1] to deflection angle theta up to 60 deg with speed preservation | M1 | Survey (all) |
 | F5 | Corridor Ricochet & Anti-Stall | Rapid chute reflections with minimum vertical speed enforcement (|vy| >= 0.2*|v|) | M1 | Survey (all) |
-| F6 | Multi-Tier Brick Destruction | Supports Normal, Reinforced (2-hit), Titanium (3-hit), Indestructible Chute Wall, Booster, Bomb | M1 | Survey (spec_miner_1, explorer_3) |
+| F6 | Multi-Tier Brick Destruction | Normal, Reinforced (2-hit), Titanium (3-hit), Indestructible Chute Wall, Booster, Bomb, plus extension types ×2 and +3 | M1 + Extension | `src/config.js`, `src/core/physics.js` |
 | F7 | Level 1: Central Chute | TikTok reference match: dense 32x44 matrix with central indestructible chute | M2 | Survey (spec_miner_1, explorer_3) |
 | F8 | Level 2: Dual Corridors | Twin vertical chutes flanking a reinforced central bastion | M2 | Survey (spec_miner_1, explorer_3) |
 | F9 | Level 3: City Matrix | Intersecting vertical and horizontal express shafts dividing field into 9 blocks | M2 | Survey (spec_miner_1, explorer_3) |
@@ -44,11 +44,21 @@ A decoupled, isomorphic architecture with zero external build/npm dependencies:
 | F20 | Procedural Web Audio Synth | Zero-asset Web Audio API sound synthesis for bounces, breaks, and fanfares | M4 | Survey (all) |
 | F21 | Responsive Web Application Shell | index.html and style.css providing mobile 9:16 aspect container and UI overlays | M4 | Survey (all) |
 | F22 | E2E Test Suite (Tiers 1-4) | Comprehensive opaque-box test suite (Tier 1-4) covering all features | E2E_TEST | Survey & Methodology |
-| F23 | Level Integrity Validator | Automated script asserting structural integrity and chute clearances for all 5 levels | M5 | Survey (all) |
+| F23 | Level Integrity Validator | Structural checks for all ten maps plus actual ball-clearance reachability for the five challenge maps | M5 + Extension | `tests/level_validator.js` |
 | F24 | 3,000-Frame Bot Rally Benchmark | Headless benchmark running 3,000 frames on Levels 1 & 2 asserting 0 drops and >=95% deflection | M5 | Survey (all) |
 | F25 | Full Integration & Verification | 100% pass of unit tests, benchmarks, and E2E test suite | M5 | Survey & Pattern |
+| F26 | Bot Challenge Campaign | Five additional armored maps (L6–L10), with radius-aware wall reachability validation and dynamic browser selection | Extension | `src/core/levels.js`, `tests/level_validator.js` |
+| F27 | ×2 and +3 Multiball | Brick types 7/8 activate on direct or bomb destruction; unique IDs, deferred births, configurable 32-ball cap, and last-ball life accounting | Extension | `src/config.js`, `src/core/physics.js`, `tests/multiball.test.js` |
+| F28 | Multiball Presentation & Campaign Verification | Distinct brick glyphs/colors, live ball count, powerup notices/audio, ten-map bot smoke benchmark, dynamic final-level tests | Extension | `src/platform/browser/`, `tests/bot_campaign_benchmark.js` |
+| F29 | Seeded Procedural Maps | 14 motifs x 3 symmetries x 9 structures, bombs/powerups/shields, palettes with per-cell tints; connectivity repair plus clearance validation; deterministic by seed | Random Maps | `src/core/map_generator.js`, `src/core/rng.js`, `src/core/map_theme.js`, `src/core/clearance.js` |
+| F30 | Endless Random Runs | `MapSequence` never repeats a fingerprint and avoids recent motifs/palettes/recipes; engine generates the next map on clear; browser menu, N hotkey, `?seed=&difficulty=&bot=&fixed=` | Random Maps | `src/core/engine.js`, `src/platform/browser/main.js` |
+| F31 | Chain Bombs, Shield Bricks, Seeker Finish | Delayed bomb cascades (fuses in state), brick type 9 energy floor, wall-aware homing on the last bricks or after a stall | Random Maps | `src/core/physics.js`, `src/config.js` |
+| F32 | Themed Rendering & Juice | Palette bricks shaded by armor, brick pop, blast rings, screen shake, shield floor, seeker balls, progress bar, map title card, audio voice budget | Random Maps | `src/platform/browser/` |
+| F33 | Headless Autoplay & Map Lab | `simulateLevel` bot runs, PNG previews, CLI with clear-time vetting and cross-run history, generated-map benchmark | Random Maps | `src/core/autoplay.js`, `tools/`, `tests/generated_maps_benchmark.js` |
 
 ## Milestones
+The milestones below record the original five-map release. F26–F28 describe the ten-map and multiball extension; current validation commands are in README.md.
+
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
 | M1 | Core Physics & State Engine | F1, F2, F3, F4, F5, F6 (`src/core/state.js`, `src/core/physics.js`, `src/config.js`, `package.json`) | none | DONE (31/31 physics unit tests pass) |

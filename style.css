@@ -376,6 +376,9 @@ kbd {
 .swatch-slate { background: #334155; border-color: #94a3b8; }
 .swatch-cyan { background: var(--accent-cyan); }
 .swatch-purple { background: var(--accent-purple); }
+.swatch-lime { background: #84cc16; }
+.swatch-pink { background: #ec4899; }
+.swatch-shield { background: #93c5fd; }
 
 .modal-footer {
   padding: 12px 18px;

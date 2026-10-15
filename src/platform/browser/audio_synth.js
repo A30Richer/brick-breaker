@@ -177,6 +177,11 @@ export class AudioSynth {
     this.playTone(580, 1160, 0.16, 'triangle', 0.8);
   }
 
+  playMultiball() {
+    this.playTone(660, 1320, 0.18, 'triangle', 0.7);
+    this.playTone(880, 1760, 0.24, 'sine', 0.5);
+  }
+
   /**
    * Ball launch sound.
    */
@@ -221,6 +226,10 @@ export class AudioSynth {
    */
   handleEvents(events) {
     if (!Array.isArray(events)) return;
+    // Per-frame voice budget: a 32-ball swarm or a bomb cascade would
+    // otherwise stack dozens of oscillators into one loud click.
+    const budget = { brick: 4, bomb: 1, wall: 2, shield: 1, lost: 1 };
+    const spend = key => (budget[key] > 0 ? budget[key]-- > 0 : false);
     for (const ev of events) {
       if (!ev) continue;
       switch (ev.type) {
@@ -228,17 +237,32 @@ export class AudioSynth {
           this.playPaddleHit();
           break;
         case 'BRICK_HIT':
-          this.playBrickHit(ev.brick);
+          if (ev.brick?.type === 6 ? spend('bomb') : spend('brick')) this.playBrickHit(ev.brick);
+          break;
+        case 'BOMB_CHAIN':
+          if (spend('bomb')) this.playBombExplosion();
           break;
         case 'WALL_HIT':
-          this.playWallBounce();
+          if (spend('wall')) this.playWallBounce();
+          break;
+        case 'SHIELD_UP':
+          this.playTone(520, 1040, 0.22, 'triangle', 0.7);
+          break;
+        case 'SHIELD_HIT':
+          if (spend('shield')) this.playTone(880, 660, 0.05, 'sine', 0.35);
+          break;
+        case 'SEEKER_ON':
+          this.playTone(700, 1400, 0.25, 'sine', 0.5);
           break;
         case 'BALL_LAUNCHED':
           this.playBallLaunch();
           break;
+        case 'MULTIBALL':
+          if (ev.spawnedCount > 0) this.playMultiball();
+          break;
         case 'BALL_LOST':
         case 'LIFE_LOST':
-          this.playBallLost();
+          if (spend('lost')) this.playBallLost();
           break;
         case 'LEVEL_CLEAR':
           this.playLevelClear();

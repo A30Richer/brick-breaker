@@ -74,6 +74,33 @@ export const BRICK_TYPES = Object.freeze({
     score: 400,
     color: '#A855F7', // Neon purple
     blastRadius: 1 // 3x3 blast grid (1 tile in each direction)
+  },
+  7: {
+    id: 7,
+    name: 'BALL_DOUBLER',
+    hp: 1,
+    breakable: true,
+    score: 350,
+    color: '#84CC16',
+    powerup: 'x2'
+  },
+  8: {
+    id: 8,
+    name: 'EXTRA_BALLS',
+    hp: 1,
+    breakable: true,
+    score: 350,
+    color: '#EC4899',
+    powerup: '+3'
+  },
+  9: {
+    id: 9,
+    name: 'SHIELD',
+    hp: 1,
+    breakable: true,
+    score: 300,
+    color: '#93C5FD',
+    powerup: 'shield'
   }
 });
 
@@ -94,6 +121,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     speed: 450, // px/s
     maxSpeed: 750,
     minSpeed: 400,
+    maxBalls: 32, // Bound multiball growth and collision work per frame
     speedIncrementOnHit: 1.5 // px/s added on brick hit
   },
   physics: {
@@ -103,7 +131,16 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxDeflectionAngle: (60 * Math.PI) / 180, // 60 degrees in radians
     paddleMomentumTransfer: 0.2, // Transfer 20% paddle velocity to ball vx
     antiStallThreshold: 0.25,
-    microJitter: 0.05
+    microJitter: 0.05,
+    chainDelay: 0.07, // seconds before a bomb caught in a blast detonates
+    // Balls home in on the last bricks (or after a long stall). Set to null to disable.
+    seeker: {
+      remainingBricks: 10,
+      remainingFraction: 0.015,
+      stallSeconds: 7,
+      turnRate: 4.5, // rad/s
+      minTotalBricks: 100
+    }
   },
   grid: {
     cols: 32,
@@ -115,7 +152,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   },
   rules: {
     initialLives: 3,
-    maxLives: 5
+    maxLives: 5,
+    shieldSeconds: 9, // SHIELD brick: energy floor under the paddle
+    maxShieldSeconds: 18,
+    shieldInset: 8 // px above the kill plane
   },
   theme: {
     background: '#0c0f1d',

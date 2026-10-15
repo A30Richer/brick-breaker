@@ -7,7 +7,7 @@
  * - Exact time of impact (TOI) and positional depenetration
  * - Variable paddle deflection angle mapping u in [-1, 1] -> theta in [-60, +60 deg]
  * - Corridor ricochet with anti-stall (|vy| >= 0.25 * |v|)
- * - Multi-tier brick destruction (Types 1-6) including 3x3 Bomb blasts
+ * - Multi-tier brick destruction (Types 1-8), 3x3 Bomb blasts, and multiball
  * - Boundary wall reflections & kill plane triggers
  * Zero external dependencies.
  */
@@ -316,9 +316,10 @@ export function applyAntiStall(ball, minRatio = 0.25, microJitter = 0.05) {
  * Triggers a 3x3 blast from an exploding bomb brick.
  * Destroys all breakable neighbors in row-1..row+1 and col-1..col+1.
  */
-function triggerBombExplosion(state, bombBrick, config) {
+function triggerBombExplosion(state, bombBrick, ball, config, pendingBalls, depth = 0) {
   const events = [];
   const { cols, rows, cells } = state.grid;
+  const chainDelay = config.physics?.chainDelay ?? DEFAULT_CONFIG.physics.chainDelay ?? 0.07;
 
   for (let r = bombBrick.row - 1; r <= bombBrick.row + 1; r++) {
     if (r < 0 || r >= rows) continue;
@@ -340,6 +341,13 @@ function triggerBombExplosion(state, bombBrick, config) {
           state.stats.bricksDestroyed++;
           state.stats.remainingBreakableBricks--;
 
+          // A bomb caught in the blast detonates a beat later, so long
+          // fuses of touching bombs roll across the field as a cascade.
+          if (neighbor.type === 6) {
+            if (!Array.isArray(state.fuses)) state.fuses = [];
+            state.fuses.push({ brickIndex: idx, ballId: ball?.id ?? null, delay: chainDelay, depth: depth + 1 });
+          }
+
           events.push({
             type: 'BRICK_HIT',
             brick: neighbor,
@@ -347,12 +355,243 @@ function triggerBombExplosion(state, bombBrick, config) {
             destroyed: true,
             source: 'BOMB_BLAST'
           });
+          events.push(...triggerMultiball(state, neighbor, ball, config, pendingBalls, 'BOMB_BLAST'));
+          events.push(...triggerShield(state, neighbor, config));
         }
       }
     }
   }
 
   return events;
+}
+
+/** SHIELD bricks raise (or extend) the energy floor under the paddle. */
+function triggerShield(state, brick, config) {
+  if (brick.type !== 9) return [];
+  const rules = config.rules ?? DEFAULT_CONFIG.rules;
+  const seconds = rules.shieldSeconds ?? DEFAULT_CONFIG.rules.shieldSeconds;
+  const cap = rules.maxShieldSeconds ?? DEFAULT_CONFIG.rules.maxShieldSeconds;
+  state.shield = Math.min(cap, (state.shield || 0) + seconds);
+  return [{ type: 'SHIELD_UP', brick, seconds: state.shield }];
+}
+
+/** Detonates chained bombs whose fuse delay has elapsed this frame. */
+function burnFuses(state, dt, config, pendingBalls) {
+  const events = [];
+  const due = [];
+  const waiting = [];
+  for (const fuse of state.fuses) {
+    fuse.delay -= dt;
+    (fuse.delay <= 0 ? due : waiting).push(fuse);
+  }
+  state.fuses = waiting;
+  for (const fuse of due) {
+    const bomb = state.bricks[fuse.brickIndex];
+    if (!bomb) continue;
+    // +3 bricks in the blast clone a live ball; prefer the one that lit the fuse.
+    const source = state.balls.find(ball => ball.id === fuse.ballId && ball.active && !ball.attachedToPaddle)
+      ?? state.balls.find(ball => ball.active && !ball.attachedToPaddle)
+      ?? pendingBalls[0]
+      ?? null;
+    events.push({ type: 'BOMB_CHAIN', brick: bomb, depth: fuse.depth });
+    events.push(...triggerBombExplosion(state, bomb, source, config, pendingBalls, fuse.depth));
+  }
+  return events;
+}
+
+/**
+ * Seeker finish: once only a handful of bricks remain, or nothing has broken
+ * for a while, every free ball bends toward the nearest remaining brick.
+ * Steering follows a cell distance field that routes around permanent walls,
+ * so balls do not grind against a wall that hides their target.
+ */
+function updateSeeker(state, dt, config) {
+  const cfg = config.physics?.seeker === undefined ? DEFAULT_CONFIG.physics.seeker : config.physics.seeker;
+  const stats = state.stats;
+  if (!cfg || !state.grid?.cells || stats.totalBreakableBricks < cfg.minTotalBricks) return;
+
+  if (!state.seeker) state.seeker = { active: false, stall: 0, lastDestroyed: stats.bricksDestroyed, field: null, fieldAge: 0 };
+  const seeker = state.seeker;
+  if (stats.bricksDestroyed !== seeker.lastDestroyed) {
+    seeker.stall = 0;
+    seeker.lastDestroyed = stats.bricksDestroyed;
+    seeker.field = null;
+  } else {
+    seeker.stall += dt;
+  }
+  const remaining = stats.remainingBreakableBricks;
+  const threshold = Math.max(cfg.remainingBricks, stats.totalBreakableBricks * cfg.remainingFraction);
+  seeker.active = remaining > 0 && (remaining <= threshold || seeker.stall >= cfg.stallSeconds);
+  if (!seeker.active) return;
+
+  const { cols, rows, cellWidth, cellHeight, offsetX, offsetY, cells } = state.grid;
+  // Distance field over grid cells plus open virtual rows above (-1) and below (rows).
+  seeker.fieldAge += dt;
+  if (!seeker.field || seeker.fieldAge > 0.5) {
+    const field = new Array((rows + 2) * cols).fill(-1);
+    const queue = [];
+    const isWall = (r, c) => {
+      if (r < 0 || r >= rows) return false;
+      const brick = state.bricks[cells[r * cols + c]];
+      return Boolean(brick && brick.active && brick.indestructible);
+    };
+    for (const brick of state.bricks) {
+      if (!brick.active || brick.indestructible || brick.hp <= 0) continue;
+      const index = (brick.row + 1) * cols + brick.col;
+      if (field[index] === -1) {
+        field[index] = 0;
+        queue.push(index);
+      }
+    }
+    for (let head = 0; head < queue.length; head++) {
+      const index = queue[head];
+      const r = Math.floor(index / cols) - 1;
+      const c = index % cols;
+      for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nr = r + dr;
+        const nc = c + dc;
+        if (nr < -1 || nr > rows || nc < 0 || nc >= cols || isWall(nr, nc)) continue;
+        const next = (nr + 1) * cols + nc;
+        if (field[next] !== -1) continue;
+        field[next] = field[index] + 1;
+        queue.push(next);
+      }
+    }
+    seeker.field = field;
+    seeker.fieldAge = 0;
+  }
+
+  const field = seeker.field;
+  const maxTurn = cfg.turnRate * dt;
+  for (const ball of state.balls) {
+    if (!ball.active || ball.attachedToPaddle) continue;
+    const col = Math.max(0, Math.min(cols - 1, Math.floor((ball.x - offsetX) / cellWidth)));
+    const row = Math.max(-1, Math.min(rows, Math.floor((ball.y - offsetY) / cellHeight)));
+    const here = field[(row + 1) * cols + col];
+    if (here === undefined || here < 0) continue;
+
+    // Aim at the best 8-neighbour (or the target itself when adjacent).
+    let best = null;
+    let bestDistance = here;
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        if (!dr && !dc) continue;
+        const nr = row + dr;
+        const nc = col + dc;
+        if (nr < -1 || nr > rows || nc < 0 || nc >= cols) continue;
+        const distance = field[(nr + 1) * cols + nc];
+        if (distance < 0 || distance >= bestDistance) continue;
+        // Diagonal moves must not cut a wall corner.
+        if (dr && dc && (field[(row + 1 + dr) * cols + col] < 0 || field[(row + 1) * cols + nc] < 0)) continue;
+        best = [nr, nc];
+        bestDistance = distance;
+      }
+    }
+    if (!best && here > 0) continue;
+    const [tr, tc] = best ?? [row, col];
+    const tx = offsetX + (tc + 0.5) * cellWidth;
+    const ty = offsetY + (tr + 0.5) * cellHeight;
+    const desired = Math.atan2(ty - ball.y, tx - ball.x);
+    const current = Math.atan2(ball.vy, ball.vx);
+    let delta = desired - current;
+    delta = Math.atan2(Math.sin(delta), Math.cos(delta));
+    const turned = current + Math.max(-maxTurn, Math.min(maxTurn, delta));
+    const speed = Math.hypot(ball.vx, ball.vy) || ball.speed;
+    ball.vx = Math.cos(turned) * speed;
+    ball.vy = Math.sin(turned) * speed;
+  }
+}
+
+/** Allocate monotonically increasing IDs, including restored older snapshots. */
+function allocateBallId(state, pendingBalls = []) {
+  const highestId = Math.max(0, ...state.balls.map(ball => ball.id || 0), ...pendingBalls.map(ball => ball.id || 0));
+  const nextId = Number.isSafeInteger(state.nextBallId) ? state.nextBallId : 1;
+  state.nextBallId = Math.max(nextId, highestId + 1) + 1;
+  return state.nextBallId - 1;
+}
+
+/** Keep a new ball inside the arena and outside solid geometry. */
+function findSpawnPosition(state, source) {
+  const radius = source.radius;
+  const clampPosition = (x, y) => ({
+    x: Math.max(radius, Math.min(state.arena.width - radius, x)),
+    y: Math.max(radius, Math.min(state.arena.height - radius, y))
+  });
+  const isFree = position => {
+    if (sweptCircleAABB(position.x, position.y, 0, 0, radius, state.paddle)) return false;
+    const bounds = {
+      minX: position.x - radius, maxX: position.x + radius,
+      minY: position.y - radius, maxY: position.y + radius
+    };
+    return querySpatialGrid(state.grid, state.bricks, bounds).every(brick =>
+      !sweptCircleAABB(position.x, position.y, 0, 0, radius, brick));
+  };
+
+  const origin = clampPosition(source.x, source.y);
+  if (isFree(origin)) return origin;
+
+  // Contact at an adjacent brick corner can leave the source slightly overlapping.
+  // Search nearby first, so a spawned ball stays in the same corridor or chamber.
+  for (const distance of [radius + 0.1, radius * 2 + 0.1, radius * 4 + 0.1, radius * 8 + 0.1]) {
+    for (let direction = 0; direction < 16; direction++) {
+      const angle = direction * Math.PI / 8;
+      const candidate = clampPosition(origin.x + Math.cos(angle) * distance, origin.y + Math.sin(angle) * distance);
+      if (isFree(candidate)) return candidate;
+    }
+  }
+
+  // The paddle launch position is a safe fallback for normal campaign layouts.
+  const fallback = clampPosition(state.paddle.x + state.paddle.width / 2, state.paddle.y - radius - 0.05);
+  return isFree(fallback) ? fallback : null;
+}
+
+/**
+ * Queue new balls until the frame ends. The queue counts toward subsequent powers,
+ * but new balls cannot collide or trigger another power during their birth frame.
+ */
+function triggerMultiball(state, brick, impactBall, config, pendingBalls, source = 'BALL_HIT') {
+  if (brick.type !== 7 && brick.type !== 8) return [];
+
+  const activeBalls = [...state.balls, ...pendingBalls].filter(ball => ball.active && !ball.attachedToPaddle);
+  const configuredLimit = config.ball?.maxBalls ?? DEFAULT_CONFIG.ball.maxBalls;
+  const maxBalls = Number.isFinite(configuredLimit) ? Math.max(1, Math.floor(configuredLimit)) : DEFAULT_CONFIG.ball.maxBalls;
+  const requestedCount = brick.type === 7 ? activeBalls.length : 3;
+  const spawnCount = Math.min(requestedCount, Math.max(0, maxBalls - activeBalls.length));
+  const spawnedIds = [];
+
+  for (let index = 0; index < spawnCount; index++) {
+    const template = brick.type === 7 ? activeBalls[index] : impactBall;
+    if (!template) continue;
+    const position = findSpawnPosition(state, template);
+    if (!position) continue;
+    const angle = brick.type === 7 ? (index % 2 === 0 ? Math.PI / 6 : -Math.PI / 6) : [-Math.PI / 4, Math.PI / 4, Math.PI / 2][index];
+    const direction = Math.atan2(template.vy, template.vx) + angle;
+    const speed = template.speed;
+    const newBall = {
+      ...template,
+      ...position,
+      id: allocateBallId(state, pendingBalls),
+      vx: Math.cos(direction) * speed,
+      vy: Math.sin(direction) * speed,
+      active: true,
+      attachedToPaddle: false,
+      inCorridor: false
+    };
+    applyAntiStall(newBall, config.physics?.minVerticalSpeedRatio, config.physics?.microJitter);
+    pendingBalls.push(newBall);
+    spawnedIds.push(newBall.id);
+  }
+
+  return [{
+    type: 'MULTIBALL',
+    powerup: brick.type === 7 ? 'BALL_DOUBLER' : 'EXTRA_BALLS',
+    brick,
+    source,
+    requestedCount,
+    spawnedCount: spawnedIds.length,
+    activeCount: activeBalls.length + spawnedIds.length,
+    ballIds: spawnedIds
+  }];
 }
 
 /**
@@ -365,11 +604,13 @@ function triggerBombExplosion(state, bombBrick, config) {
  * @returns {Array} Array of detailed physics and gameplay events.
  */
 export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAULT_CONFIG) {
+  if ([GAME_STATUS.PAUSED, GAME_STATUS.GAME_OVER, GAME_STATUS.VICTORY].includes(state.status)) return [];
   // Clamp dt to avoid spiral of death on background tabs
   const clampedDt = Math.max(0, Math.min(dt, 0.05));
   if (clampedDt <= 0) return [];
 
   const events = [];
+  const pendingBalls = [];
   const physicsCfg = config.physics || DEFAULT_CONFIG.physics;
   const numSubSteps = physicsCfg.subSteps || 8;
   const subDt = clampedDt / numSubSteps;
@@ -467,6 +708,18 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
           }
         }
 
+        // Energy floor from a SHIELD brick, just above the kill plane
+        if (state.shield > 0 && dy > 0) {
+          const shieldY = arenaHeight - (config.rules?.shieldInset ?? DEFAULT_CONFIG.rules.shieldInset) - ball.radius;
+          if (ball.y <= shieldY && ball.y + dy > shieldY) {
+            const tShield = (shieldY - ball.y) / dy;
+            if (tShield >= 0 && tShield <= 1 && (!earliestHit || tShield < earliestHit.t)) {
+              earliestHit = { t: tShield, nx: 0, ny: -1, depth: 0 };
+              hitType = 'SHIELD';
+            }
+          }
+        }
+
         // B. Check Paddle Collision
         const paddleBox = {
           x: state.paddle.x,
@@ -538,6 +791,11 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
             applyAntiStall(ball, physicsCfg.minVerticalSpeedRatio, physicsCfg.microJitter);
             state.stats.wallHits++;
             events.push({ type: 'WALL_HIT', wall: hitType, ball });
+          } else if (hitType === 'SHIELD') {
+            ball.vy = -Math.abs(ball.vy);
+            ball.y -= 0.05;
+            applyAntiStall(ball, physicsCfg.minVerticalSpeedRatio, physicsCfg.microJitter);
+            events.push({ type: 'SHIELD_HIT', ball });
           } else if (hitType === 'PADDLE') {
             // Top deflection calculation
             const defl = calculatePaddleDeflection(ball.x, state.paddle, ball.speed, config);
@@ -570,7 +828,7 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
             applyAntiStall(ball, physicsCfg.minVerticalSpeedRatio, physicsCfg.microJitter);
 
             // Handle brick damage & destruction
-            const brickEvents = resolveBrickHit(state, brick, ball, config);
+            const brickEvents = resolveBrickHit(state, brick, ball, config, pendingBalls);
             events.push(...brickEvents);
           }
 
@@ -582,9 +840,25 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
     }
   }
 
+  // 2b. Chain reactions advance only while the ball is in play.
+  if (state.status === GAME_STATUS.PLAYING && state.fuses?.length) {
+    events.push(...burnFuses(state, clampedDt, config, pendingBalls));
+  }
+  if (state.status === GAME_STATUS.PLAYING && state.shield > 0) {
+    state.shield = Math.max(0, state.shield - clampedDt);
+    if (state.shield === 0) events.push({ type: 'SHIELD_DOWN' });
+  }
+  if (state.status === GAME_STATUS.PLAYING) {
+    const wasSeeking = Boolean(state.seeker?.active);
+    updateSeeker(state, clampedDt, config);
+    if (!wasSeeking && state.seeker?.active) events.push({ type: 'SEEKER_ON' });
+  }
+
   // 3. Post-substep lifecycle checks
+  // Retire lost balls and append births only after the existing balls finish moving.
+  const lostBall = state.balls.find(ball => !ball.active);
+  const activeBalls = [...state.balls.filter(ball => ball.active), ...pendingBalls];
   // Life loss & Game Over check if all balls are lost
-  const activeBalls = state.balls.filter(b => b.active);
   if (activeBalls.length === 0 && state.status === GAME_STATUS.PLAYING) {
     state.lives--;
     if (state.lives <= 0) {
@@ -593,10 +867,12 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
     } else {
       // Re-arm ball onto paddle
       state.status = GAME_STATUS.READY;
-      const respawnBall = state.balls[0] || {
-        id: 1,
-        radius: config.ball?.radius || 4.5,
-        speed: config.ball?.speed || 450
+      const respawnBall = {
+        ...(lostBall || {}),
+        id: allocateBallId(state),
+        radius: lostBall?.radius ?? config.ball?.radius ?? 4.5,
+        speed: lostBall?.speed || config.ball?.speed || 450,
+        inCorridor: false
       };
       respawnBall.active = true;
       respawnBall.attachedToPaddle = true;
@@ -604,12 +880,11 @@ export function stepPhysics(state, inputAction = {}, dt = 1 / 60, config = DEFAU
       respawnBall.vy = 0;
       respawnBall.x = state.paddle.x + state.paddle.width / 2;
       respawnBall.y = state.paddle.y - respawnBall.radius;
-      if (!state.balls.includes(respawnBall)) {
-        state.balls.push(respawnBall);
-      }
+      activeBalls.push(respawnBall);
       events.push({ type: 'LIFE_LOST', remainingLives: state.lives });
     }
   }
+  state.balls = activeBalls;
 
   // Level Clear check: all breakable bricks destroyed
   if (state.stats.remainingBreakableBricks <= 0 && state.status === GAME_STATUS.PLAYING) {
@@ -660,8 +935,9 @@ function updatePaddle(paddle, inputAction, dt, arenaWidth) {
 /**
  * Resolves damage, scoring, speed boost, bomb explosions, and destruction for a brick hit.
  */
-function resolveBrickHit(state, brick, ball, config) {
+function resolveBrickHit(state, brick, ball, config, pendingBalls) {
   const events = [];
+  if (!brick.active) return events;
 
   if (brick.indestructible || brick.type === 4) {
     state.stats.corridorHits++;
@@ -721,9 +997,11 @@ function resolveBrickHit(state, brick, ball, config) {
 
     // Bomb brick: trigger 3x3 blast
     if (brick.type === 6) {
-      const blastEvents = triggerBombExplosion(state, brick, config);
+      const blastEvents = triggerBombExplosion(state, brick, ball, config, pendingBalls);
       events.push(...blastEvents);
     }
+    events.push(...triggerMultiball(state, brick, ball, config, pendingBalls));
+    events.push(...triggerShield(state, brick, config));
   } else {
     // Damaged but not yet destroyed
     events.push({

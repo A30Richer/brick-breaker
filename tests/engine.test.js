@@ -415,7 +415,7 @@ test('F16 & F12: Level Progression and Victory Flow', async (t) => {
     // Simulate all breakable bricks destroyed
     state.stats.remainingBreakableBricks = 0;
     for (const b of state.bricks) {
-      if (b.breakable) {
+      if (!b.indestructible) {
         b.hp = 0;
         b.active = false;
       }
@@ -434,18 +434,19 @@ test('F16 & F12: Level Progression and Victory Flow', async (t) => {
     assert.equal(tick2.state.lives, 3, 'Lives carry over');
   });
 
-  await t.test('Clearing all breakable bricks on Level 5 triggers VICTORY state', () => {
+  await t.test('Clearing all breakable bricks on the final campaign level triggers VICTORY state', () => {
     const engine = new GameEngine(DEFAULT_CONFIG);
-    engine.loadLevel(4); // Level 5 (index 4)
+    const finalLevelIndex = LEVEL_DEFINITIONS.length - 1;
+    engine.loadLevel(finalLevelIndex);
     engine.launchBall();
 
     const state = engine.getState();
-    assert.equal(state.levelIndex, 4);
+    assert.equal(state.levelIndex, finalLevelIndex);
 
     // Destroy all breakable bricks
     state.stats.remainingBreakableBricks = 0;
     for (const b of state.bricks) {
-      if (b.breakable) {
+      if (!b.indestructible) {
         b.hp = 0;
         b.active = false;
       }
@@ -458,6 +459,41 @@ test('F16 & F12: Level Progression and Victory Flow', async (t) => {
     // Further ticks maintain VICTORY
     const followUp = engine.tick(1 / 60);
     assert.equal(followUp.state.status, GAME_STATUS.VICTORY);
+  });
+
+  await t.test('Each campaign level advances in order and only the final level awards victory', () => {
+    const engine = new GameEngine(DEFAULT_CONFIG);
+    engine.setBotActive(true);
+    engine.getState().score = 4000;
+    engine.getState().lives = 2;
+
+    for (let levelIndex = 0; levelIndex < LEVEL_DEFINITIONS.length; levelIndex++) {
+      const state = engine.getState();
+      assert.equal(state.levelIndex, levelIndex);
+      assert.equal(state.levelName, LEVEL_DEFINITIONS[levelIndex].name);
+      engine.launchBall();
+      for (const brick of state.bricks) {
+        if (!brick.indestructible) {
+          brick.hp = 0;
+          brick.active = false;
+        }
+      }
+      state.stats.remainingBreakableBricks = 0;
+
+      const cleared = engine.tick(1 / 60);
+      const isFinalLevel = levelIndex === LEVEL_DEFINITIONS.length - 1;
+      assert.equal(cleared.state.status, isFinalLevel ? GAME_STATUS.VICTORY : GAME_STATUS.LEVEL_CLEAR);
+      assert.ok(cleared.events.some(event => event.type === 'LEVEL_CLEAR'));
+      assert.equal(cleared.events.some(event => event.type === 'VICTORY'), isFinalLevel);
+
+      const advanced = engine.tick(1 / 60);
+      assert.equal(advanced.state.status, isFinalLevel ? GAME_STATUS.VICTORY : GAME_STATUS.READY);
+      assert.equal(advanced.state.levelIndex, isFinalLevel ? levelIndex : levelIndex + 1);
+      assert.equal(advanced.state.score, 4000);
+      assert.equal(advanced.state.lives, 2);
+      assert.equal(advanced.state.mode.isBotActive, true);
+      assert.equal(advanced.events.some(event => event.type === 'LEVEL_ADVANCED'), !isFinalLevel);
+    }
   });
 });
 
